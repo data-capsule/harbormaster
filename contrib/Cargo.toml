@@ -28,7 +28,7 @@ chrono= "0.4.40"
 iso8601 = "0.6.2"
 
 
-pft = { path = "../"}
+psl = { path = "../"}
 async-recursion = "1.1.1"
 
 [[bin]]

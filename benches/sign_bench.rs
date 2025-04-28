@@ -1,4 +1,4 @@
-use pft::crypto::KeyStore;
+use psl::crypto::KeyStore;
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::prelude::*;

@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info};
-use pft::{config::{self, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
+use psl::{config::{self, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::{client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan, RespType, Server, ServerContextType}, MessageRef, PinnedMessage}};
 use tokio::{runtime, signal, task::JoinSet, time::sleep};
 use std::{env, fs, io::{self, Error}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex}, time::Duration};
 use std::io::Write;
@@ -62,7 +62,7 @@ struct ProfilerContext {
 pub struct PinnedProfilerContext(pub Arc<Pin<Box<ProfilerContext>>>);
 
 impl ServerContextType for PinnedProfilerContext {
-    fn get_server_keys(&self) -> Arc<Box<pft::crypto::KeyStore>> {
+    fn get_server_keys(&self) -> Arc<Box<psl::crypto::KeyStore>> {
         self.0.key_store.get()
     }
     
@@ -131,7 +131,7 @@ impl ProfilerNode
 
         js.spawn(async move {
             let payload = vec![2u8; payload_sz];
-            let msg = PinnedMessage::from(payload, payload_sz, pft::rpc::SenderType::Anon);
+            let msg = PinnedMessage::from(payload, payload_sz, psl::rpc::SenderType::Anon);
             // let send_list = get_everyone_except_me(
                 // &node2.ctx.0.config.net_config.name,
                 // &node2.ctx.0.config.consensus_config.node_list);

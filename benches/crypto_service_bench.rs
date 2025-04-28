@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use pft::crypto::{AtomicKeyStore, CryptoService, CryptoServiceConnector, KeyStore};
+use psl::crypto::{AtomicKeyStore, CryptoService, CryptoServiceConnector, KeyStore};
 use tokio::task::JoinSet;
 
 async fn hash_worker(mut crypto: CryptoServiceConnector, payload_size: usize, iter_num: usize) -> Vec<Duration> {

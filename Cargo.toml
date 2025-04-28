@@ -6,8 +6,8 @@ resolver = "2"
 members = [".", "contrib"]
 
 [package]
-name = "pft"
-version = "0.3.0"
+name = "psl"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]

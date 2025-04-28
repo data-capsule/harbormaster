@@ -970,9 +970,9 @@ dependencies = [
  "iso8601",
  "log",
  "log4rs",
- "pft",
  "prost",
  "prost-types",
+ "psl",
  "rand 0.8.5",
  "reqwest",
  "rustls",
@@ -3157,56 +3157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pft"
-version = "0.3.0"
-dependencies = [
- "actix-web",
- "async-channel",
- "async-recursion",
- "bincode",
- "bitcode",
- "byteorder",
- "bytes",
- "clap 4.5.35",
- "colog",
- "core_affinity",
- "criterion",
- "crossbeam",
- "ed25519-dalek",
- "futures",
- "gluesql",
- "hashbrown 0.15.2",
- "hex",
- "indexmap 2.8.0",
- "itertools 0.14.0",
- "kanal",
- "log",
- "log4rs",
- "lz4_flex",
- "memory-stats",
- "nix 0.29.0",
- "num_cpus",
- "prost",
- "prost-build",
- "prost-types",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "reqwest",
- "rocksdb",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_cbor",
- "serde_json",
- "sha2",
- "sha3",
- "snmalloc-rs",
- "tokio",
- "tokio-rustls",
- "zipf",
-]
-
-[[package]]
 name = "pin-project"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3441,6 +3391,56 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
 dependencies = [
  "prost",
+]
+
+[[package]]
+name = "psl"
+version = "0.2.0"
+dependencies = [
+ "actix-web",
+ "async-channel",
+ "async-recursion",
+ "bincode",
+ "bitcode",
+ "byteorder",
+ "bytes",
+ "clap 4.5.35",
+ "colog",
+ "core_affinity",
+ "criterion",
+ "crossbeam",
+ "ed25519-dalek",
+ "futures",
+ "gluesql",
+ "hashbrown 0.15.2",
+ "hex",
+ "indexmap 2.8.0",
+ "itertools 0.14.0",
+ "kanal",
+ "log",
+ "log4rs",
+ "lz4_flex",
+ "memory-stats",
+ "nix 0.29.0",
+ "num_cpus",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "reqwest",
+ "rocksdb",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_cbor",
+ "serde_json",
+ "sha2",
+ "sha3",
+ "snmalloc-rs",
+ "tokio",
+ "tokio-rustls",
+ "zipf",
 ]
 
 [[package]]

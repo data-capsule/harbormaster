@@ -2,12 +2,12 @@
 // Licensed under the MIT License.
 
 use log::{debug, error, info, warn};
-use pft::config::{self, Config};
-use pft::consensus;
+use psl::config::{self, Config};
+use psl::consensus;
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use pft::consensus::engines::{null_app::NullApp, kvs::KVSAppEngine};
+use psl::consensus::engines::{null_app::NullApp, kvs::KVSAppEngine};
 use std::io::Write;
 
 #[global_allocator]

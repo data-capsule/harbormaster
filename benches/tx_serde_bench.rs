@@ -1,5 +1,5 @@
 
-use pft::proto::{client::ProtoClientRequest, consensus::{ProtoBlock, ProtoFork, ProtoTransactionList}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
+use psl::proto::{client::ProtoClientRequest, consensus::{ProtoBlock, ProtoFork, ProtoTransactionList}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase}};
 use prost::Message;
 
 fn get_small_tx_msg() -> ProtoClientRequest {
@@ -8,7 +8,7 @@ fn get_small_tx_msg() -> ProtoClientRequest {
             on_receive: None,
             on_crash_commit: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
-                    op_type: pft::proto::execution::ProtoTransactionOpType::Noop.into(),
+                    op_type: psl::proto::execution::ProtoTransactionOpType::Noop.into(),
                     operands: vec![vec![2u8; 2]],
                 }],
             }),
@@ -28,7 +28,7 @@ fn get_large_tx_msg() -> ProtoClientRequest {
             on_receive: None,
             on_crash_commit: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
-                    op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+                    op_type: psl::proto::execution::ProtoTransactionOpType::Write.into(),
                     operands: vec![
                         format!("crash_commit_{}", rand::random::<u64>()).into_bytes(),
                         format!("Tx:{}:{}", rand::random::<u64>(), rand::random::<u64>()).into_bytes()
@@ -58,7 +58,7 @@ fn main() {
         let v = tx.encode_to_vec();
         large_lens.push(v.len());
         large_fork.blocks.push(ProtoBlock {
-            tx: Some(pft::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {tx_list: vec![tx.tx.unwrap()]})),
+            tx: Some(psl::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {tx_list: vec![tx.tx.unwrap()]})),
             n: i as u64,
             parent: vec![0u8; 32],
             view: 1,
@@ -66,7 +66,7 @@ fn main() {
             fork_validation: Vec::new(),
             view_is_stable: true,
             config_num: 0,
-            sig: Some(pft::proto::consensus::proto_block::Sig::ProposerSig(vec![0u8; 64])),
+            sig: Some(psl::proto::consensus::proto_block::Sig::ProposerSig(vec![0u8; 64])),
         });
     }
 
@@ -84,7 +84,7 @@ fn main() {
         let v = tx.encode_to_vec();
         small_lens.push(v.len());
         small_fork.blocks.push(ProtoBlock {
-            tx: Some(pft::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {tx_list: vec![tx.tx.unwrap()]})),
+            tx: Some(psl::proto::consensus::proto_block::Tx::TxList(ProtoTransactionList {tx_list: vec![tx.tx.unwrap()]})),
             n: i as u64,
             parent: vec![0u8; 32],
             view: 1,
@@ -92,7 +92,7 @@ fn main() {
             fork_validation: Vec::new(),
             view_is_stable: true,
             config_num: 0,
-            sig: Some(pft::proto::consensus::proto_block::Sig::ProposerSig(vec![0u8; 64])),
+            sig: Some(psl::proto::consensus::proto_block::Sig::ProposerSig(vec![0u8; 64])),
         });
     }
 

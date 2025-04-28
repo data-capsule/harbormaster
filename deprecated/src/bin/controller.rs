@@ -5,7 +5,7 @@ use std::{fs, io, path};
 
 use clap::{arg, command, Arg, ArgAction};
 use log::{debug, info, trace};
-use pft::{
+use psl::{
     config::{default_log4rs_config, ClientConfig},
     consensus::reconfiguration::{serialize_add_learner, serialize_del_learner, serialize_downgrade_fullnode, serialize_upgrade_fullnode, LearnerInfo},
     crypto::KeyStore,
@@ -172,7 +172,7 @@ async fn main() -> io::Result<()> {
 
     let rpc_msg_body = ProtoPayload {
         message: Some(
-            pft::proto::rpc::proto_payload::Message::ClientRequest(client_req),
+            psl::proto::rpc::proto_payload::Message::ClientRequest(client_req),
         ),
     };
 
@@ -187,7 +187,7 @@ async fn main() -> io::Result<()> {
         let msg = PinnedClient::send_and_await_reply(
             &client,
             &curr_leader,
-            MessageRef(&buf, buf.len(), &pft::rpc::SenderType::Anon),
+            MessageRef(&buf, buf.len(), &psl::rpc::SenderType::Anon),
         )
         .await
         .unwrap();
@@ -198,11 +198,11 @@ async fn main() -> io::Result<()> {
             continue;
         }
         let resp = match resp.reply.unwrap() {
-            pft::proto::client::proto_client_reply::Reply::Receipt(r) => r,
-            pft::proto::client::proto_client_reply::Reply::TryAgain(_) => {
+            psl::proto::client::proto_client_reply::Reply::Receipt(r) => r,
+            psl::proto::client::proto_client_reply::Reply::TryAgain(_) => {
                 continue;
             },
-            pft::proto::client::proto_client_reply::Reply::Leader(l) => {
+            psl::proto::client::proto_client_reply::Reply::Leader(l) => {
                 if curr_leader != l.name {
                     trace!("Switching leader: {} --> {}", curr_leader, l.name);
                     PinnedClient::drop_connection(&client, &curr_leader).await;    
@@ -210,7 +210,7 @@ async fn main() -> io::Result<()> {
                 }
                 continue;
             },
-            pft::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
+            psl::proto::client::proto_client_reply::Reply::TentativeReceipt(r) => {
                 debug!("Got tentative receipt: {:?}", r);
                 break;
             },
