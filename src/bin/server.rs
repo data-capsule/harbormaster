@@ -1,41 +1,58 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use psl::config::{self, Config};
-use psl::consensus;
+use psl::{consensus, storage_server};
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use psl::consensus::engines::{null_app::NullApp, kvs::KVSAppEngine};
+use psl::consensus::engines::kvs::KVSAppEngine;
 use std::io::Write;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
+enum RunMode {
+    Storage,
+    Worker,
+    Sequencer,
+}
+
 /// Fetch json config file from command line path.
 /// Panic if not found or parsed properly.
-fn process_args() -> Config {
+fn process_args() -> (Config, RunMode) {
     macro_rules! usage_str {
         () => {
-            "\x1b[31;1mUsage: {} path/to/config.json\x1b[0m"
+            "\x1b[31;1mUsage: {} storage|worker|sequencer path/to/config.json\x1b[0m"
         };
     }
 
     let args: Vec<_> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() != 3 {
         panic!(usage_str!(), args[0]);
     }
 
-    let cfg_path = path::Path::new(args[1].as_str());
+    if args[1] != "storage" && args[1] != "worker" && args[1] != "sequencer" {
+        panic!(usage_str!(), args[0]);
+    }
+
+    let run_mode = match args[1].as_str() {
+        "storage" => RunMode::Storage,
+        "worker" => RunMode::Worker,
+        "sequencer" => RunMode::Sequencer,
+        _ => panic!(usage_str!(), args[0]),
+    };
+
+    let cfg_path = path::Path::new(args[2].as_str());
     if !cfg_path.exists() {
         panic!(usage_str!(), args[0]);
     }
 
     let cfg_contents = fs::read_to_string(cfg_path).expect("Invalid file path");
 
-    Config::deserialize(&cfg_contents)
+    (Config::deserialize(&cfg_contents), run_mode)
 }
 
 #[allow(unused_assignments)]
@@ -56,37 +73,72 @@ fn get_feature_set() -> (&'static str, &'static str) {
     (protocol, app)
 }
 
-async fn run_main(cfg: Config) -> io::Result<()> {
-    #[cfg(feature = "app_logger")]
-    let mut node = consensus::ConsensusNode::<NullApp>::new(cfg);
-    // #[cfg(feature = "app_logger")]
-    // let node = Arc::new(consensus::ConsensusNode::<PinnedLoggerEngine>::new(&cfg));
-    
-    #[cfg(feature = "app_kvs")]
-    let mut node = consensus::ConsensusNode::<KVSAppEngine>::new(cfg);
-    
-    #[cfg(feature = "app_sql")]
-    let node = Arc::new(consensus::ConsensusNode::<PinnedSQLEngine>::new(&cfg));
-    
-    // let mut handles = consensus::ConsensusNode::run(node);
-    let mut handles = node.run().await;
+enum NodeType {
+    Sequencer(consensus::ConsensusNode<KVSAppEngine>),
+    Worker,
+    Storage(storage_server::StorageNode),
 
-    match signal::ctrl_c().await {
-        Ok(_) => {
-            info!("Received SIGINT. Shutting down.");
-            handles.abort_all();
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            info!("Force shutdown.");
-            exit(0);
-        },
-        Err(e) => {
-            error!("Signal: {:?}", e);
+}
+async fn run_sequencer(cfg: Config) -> NodeType {    
+    let node = consensus::ConsensusNode::<KVSAppEngine>::new(cfg);
+    
+    NodeType::Sequencer(node)
+}
+
+
+async fn run_worker(cfg: Config) -> NodeType {
+    // TODO
+    NodeType::Worker
+}
+
+async fn run_storage(cfg: Config) -> NodeType {
+    let node = storage_server::StorageNode::new(cfg);
+    NodeType::Storage(node)
+}
+
+
+macro_rules! handle_signal_till_end {
+    ($node:expr) => {
+        let mut handles = $node.run().await;
+        match signal::ctrl_c().await {
+            Ok(_) => {
+                info!("Received SIGINT. Shutting down.");
+                handles.abort_all();
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                info!("Force shutdown.");
+                exit(0);
+            },
+            Err(e) => {
+                error!("Signal: {:?}", e);
+            }
         }
-    }
+    
+        while let Some(res) = handles.join_next().await {
+            info!("Task completed with {:?}", res);
+        }
 
-    while let Some(res) = handles.join_next().await {
-        info!("Task completed with {:?}", res);
-    }
+    };
+}
+async fn run_main(cfg: Config, run_mode: RunMode) -> Result<(), io::Error> {
+    let node_type = match run_mode {
+        RunMode::Storage => run_storage(cfg).await,
+        RunMode::Worker => run_worker(cfg).await,
+        RunMode::Sequencer => run_sequencer(cfg).await,
+    };
+
+    match node_type {
+        NodeType::Sequencer(mut consensus_node) => {
+            handle_signal_till_end!(consensus_node);
+        },
+        NodeType::Worker => {
+            unimplemented!();
+        },
+        NodeType::Storage(mut storage_node) => {
+            handle_signal_till_end!(storage_node);
+        }
+    };
+    
+    
     Ok(())
 }
 
@@ -95,7 +147,7 @@ const NUM_THREADS: usize = 32;
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
 
-    let cfg = process_args();
+    let (cfg, run_mode) = process_args();
 
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
@@ -140,5 +192,5 @@ fn main() {
         })
         .build()
         .unwrap();
-    let _ = runtime.block_on(run_main(cfg));
+    let _ = runtime.block_on(run_main(cfg, run_mode));
 }
