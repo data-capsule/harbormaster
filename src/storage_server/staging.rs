@@ -1,8 +1,11 @@
 use std::{io::Error, sync::Arc};
 
+use hashbrown::HashMap;
+use log::error;
+use prost::Message as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, rpc::{client::{Client, PinnedClient}, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::ProtoBackfillNack, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::channel::{Receiver, Sender}};
 
 use super::fork_receiver::ForkReceiverCommand;
 
@@ -13,6 +16,8 @@ pub struct Staging {
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>,
     logserver_tx: Sender<CachedBlock>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
+
+    last_confirmed_n: HashMap<SenderType, u64>,
 }
 
 impl Staging {
@@ -31,6 +36,8 @@ impl Staging {
             logserver_tx,
             fork_receiver_cmd_tx,
             client: client.into(),
+
+            last_confirmed_n: HashMap::new(),
         }
     }
 
@@ -79,11 +86,88 @@ impl Staging {
     /// 2. Send to logserver
     /// 3. Send vote to sender.
     async fn handle_checked_block(&mut self, block: CachedBlock, sender: SenderType) {
-        
+        let _ = self.fork_receiver_cmd_tx.send(
+            ForkReceiverCommand::Confirm(sender.clone(), block.block.n)
+        );
+
+        let _ = self.logserver_tx.send(block.clone()).await;
+
+        let last_n = self.last_confirmed_n.entry(sender.clone())
+            .or_insert(0);
+
+        if block.block.n > *last_n {
+            *last_n = block.block.n;
+        }
+
+        self.vote_on_block(block, sender).await;
+
+
     }
 
     /// 1. Rollback anything that is not confirmed.
     /// 2. Send backfill Nack to sender
     async fn handle_error(&mut self, err: Error, sender: SenderType) {
+        error!("Block verification error: {:?}", err);
+
+        let last_n = self.last_confirmed_n.get(&sender).unwrap_or(&0);
+
+        let _ = self.fork_receiver_cmd_tx.send(
+            ForkReceiverCommand::Rollback(sender.clone(), *last_n)
+        );
+
+        self.nack(sender, 1 + *last_n).await;
+    }
+
+
+    async fn vote_on_block(&mut self, block: CachedBlock, sender: SenderType) {
+        let vote = ProtoVote {
+            fork_digest: block.block_hash.clone(),
+            n: block.block.n,
+            
+            // Unused
+            sig_array: vec![],
+            view: 0,
+            config_num: 0,
+        };
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::Vote(vote)),
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+
+        let (name, _) = sender.to_name_and_sub_id();
+
+        let _ = PinnedClient::send(&self.client, &name,
+            MessageRef(&buf, sz, &SenderType::Anon)
+        ).await;
+
+
+    }
+
+    async fn nack(&mut self, sender: SenderType, last_index_needed: u64) {
+        let my_name = self.config.get().net_config.name.clone();
+        let nack = ProtoBackfillNack {
+            last_index_needed,
+            reply_name: my_name,
+
+            // Unused
+            hints: vec![],
+            origin: None,
+        };
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+
+        let (name, _) = sender.to_name_and_sub_id();
+
+        let _ = PinnedClient::send(&self.client, &name,
+            MessageRef(&buf, sz, &SenderType::Anon)
+        ).await;
     }
 }

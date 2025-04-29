@@ -17,7 +17,7 @@ pub struct StorageServerContext {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-    backfill_request_tx: Sender<(ProtoBackfillNack, MsgAckChan)>,
+    backfill_request_tx: Sender<ProtoBackfillNack>,
 }
 
 #[derive(Clone)]
@@ -28,7 +28,7 @@ impl PinnedStorageServerContext {
         config: AtomicConfig,
         keystore: AtomicKeyStore,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-        backfill_request_tx: Sender<(ProtoBackfillNack, MsgAckChan)>,
+        backfill_request_tx: Sender<ProtoBackfillNack>,
     ) -> Self {
         let context = StorageServerContext {
             config,
@@ -53,7 +53,7 @@ impl ServerContextType for PinnedStorageServerContext {
         self.keystore.get()
     }
 
-    async fn handle_rpc(&self, m: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
+    async fn handle_rpc(&self, m: MessageRef<'_>, _ack_chan: MsgAckChan) -> Result<RespType, Error> {
         let sender = match m.2 {
             crate::rpc::SenderType::Anon => {
                 return Err(Error::new(
@@ -87,9 +87,9 @@ impl ServerContextType for PinnedStorageServerContext {
                 return Ok(RespType::NoResp);
             },
             crate::proto::rpc::proto_payload::Message::BackfillNack(proto_backfill_nack) => {
-                self.backfill_request_tx.send((proto_backfill_nack, ack_chan)).await
+                self.backfill_request_tx.send(proto_backfill_nack).await
                     .expect("Channel send error");
-                return Ok(RespType::Resp);
+                return Ok(RespType::NoResp);
             },
 
             _ => {
@@ -128,8 +128,8 @@ impl StorageNode {
         config: Config,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         fork_receiver_rx: Receiver<(ProtoAppendEntries, SenderType)>,
-        backfill_request_tx: Sender<(ProtoBackfillNack, MsgAckChan)>,
-        backfill_request_rx: Receiver<(ProtoBackfillNack, MsgAckChan)>,
+        backfill_request_tx: Sender<ProtoBackfillNack>,
+        backfill_request_rx: Receiver<ProtoBackfillNack>,
     ) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
         let _num_crypto_tasks = config.consensus_config.num_crypto_workers;

@@ -129,7 +129,7 @@ impl ForkReceiver {
 
             },
 
-            // Everything >= n must be rolled back.
+            // Everything > n must be rolled back. (mind that it is > and not >=)
             // Maybe the blocks weren't valid.
             ForkReceiverCommand::Rollback(sender, n) => {
                 if !self.continuity_stats.contains_key(&sender) {
@@ -138,7 +138,7 @@ impl ForkReceiver {
 
                 let stats = self.continuity_stats.get_mut(&sender).unwrap();
 
-                stats.retain(|b| b.block_n < n);
+                stats.retain(|b| b.block_n <= n);
             }
         }
         Ok(())

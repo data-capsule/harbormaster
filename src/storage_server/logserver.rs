@@ -2,21 +2,23 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::checkpoint::ProtoBackfillNack, rpc::server::MsgAckChan, utils::channel::Receiver};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::checkpoint::ProtoBackfillNack, utils::channel::Receiver};
 
 pub struct LogServer {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
 
     block_rx: Receiver<CachedBlock>,
-    query_rx: Receiver<(ProtoBackfillNack, MsgAckChan)>,
+    query_rx: Receiver<ProtoBackfillNack>,
+
+
 }
 
 impl LogServer {
     pub fn new(
         config: AtomicConfig, keystore: AtomicKeyStore,
         block_rx: Receiver<CachedBlock>,
-        query_rx: Receiver<(ProtoBackfillNack, MsgAckChan)>,
+        query_rx: Receiver<ProtoBackfillNack>,
     ) -> Self {
         Self {
             config,
