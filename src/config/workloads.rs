@@ -23,11 +23,22 @@ pub struct KVReadWriteYCSB {
     pub load_phase: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+pub struct Blanks {
+
+    #[serde(default = "default_payload_size")]
+    pub payload_size: usize,
+}
+
+const fn default_payload_size() -> usize {
+    512
+}
 
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum RequestConfig {
     Blanks,
+    AEBlanks(Blanks),
     KVReadWriteUniform(KVReadWriteUniform),
     KVReadWriteYCSB(KVReadWriteYCSB),
     MockSQL(),

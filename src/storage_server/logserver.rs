@@ -1,9 +1,9 @@
-use std::{collections::{HashMap, VecDeque}, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::warn;
+use log::{info, warn};
 use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::checkpoint::ProtoBackfillNack, rpc::{client::{Client, PinnedClient}, SenderType}, utils::{channel::Receiver, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::checkpoint::ProtoBackfillNack, rpc::{client::{Client, PinnedClient}, SenderType}, utils::{channel::Receiver, timer::ResettableTimer, StorageServiceConnector}};
 
 pub struct LogServer {
     config: AtomicConfig,
@@ -19,6 +19,10 @@ pub struct LogServer {
     block_rx: Receiver<(SenderType, CachedBlock)>,
     query_rx: Receiver<ProtoBackfillNack>,
 
+    log_timer: Arc<Pin<Box<ResettableTimer>>>,
+    submitted_block_window: usize,
+    submitted_bytes_window: usize,
+
 
 }
 
@@ -31,7 +35,9 @@ impl LogServer {
         query_rx: Receiver<ProtoBackfillNack>,
     ) -> Self {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
-
+        let log_timer = ResettableTimer::new(
+            Duration::from_millis(config.get().app_config.logger_stats_report_ms)
+        );
         Self {
             config,
             keystore,
@@ -42,11 +48,16 @@ impl LogServer {
             storage,
             last_gced_n: HashMap::new(),
             fork_cache: HashMap::new(),
+            log_timer,
+            submitted_block_window: 0,
+            submitted_bytes_window: 0,
         }
     }
 
     pub async fn run(logserver: Arc<Mutex<LogServer>>) {
         let mut logserver = logserver.lock().await;
+
+        logserver.log_timer.run().await;
 
         while let Ok(_) = logserver.worker().await {
 
@@ -56,6 +67,9 @@ impl LogServer {
 
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
+            _tick = self.log_timer.wait() => {
+                self.log_stats().await;
+            }
             sender_and_n = self.gc_rx.recv() => {
                 if sender_and_n.is_none() {
                     return Err(());
@@ -70,7 +84,10 @@ impl LogServer {
                 }
                 let (sender, block) = sender_and_block.unwrap();
 
+                self.submitted_block_window += 1;
+                self.submitted_bytes_window += block.block_ser.len();
                 self.handle_block(block, sender).await;
+                
             },
             query = self.query_rx.recv() => {
                 if query.is_none() {
@@ -127,5 +144,25 @@ impl LogServer {
 
     async fn handle_query(&mut self, query: ProtoBackfillNack) {
         // TODO: Change datatype for query.
+    }
+
+    async fn log_stats(&mut self) {
+        let total_forks = self.fork_cache.len();
+        let avg_fork_size = if total_forks == 0 {
+            0f64
+        } else {
+            self.fork_cache.values().map(|v| v.len()).sum::<usize>() as f64 / total_forks as f64
+        };
+
+        let block_throughput = self.submitted_block_window as f64
+            / self.log_timer.timeout.as_secs_f64();
+
+        let bytes_throughput = self.submitted_bytes_window as f64
+            / self.log_timer.timeout.as_secs_f64();
+
+        info!("Total forks: {} Avg fork size: {} Approx Throughput: {} blocks/s or {} MiB/s", total_forks, avg_fork_size, block_throughput, bytes_throughput / (1024.0 * 1024.0));
+
+        self.submitted_block_window = 0;
+        self.submitted_bytes_window = 0;
     }
 }

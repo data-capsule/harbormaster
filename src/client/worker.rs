@@ -5,7 +5,7 @@ use nix::libc::stat;
 use prost::Message as _;
 use tokio::{sync::oneshot::error, task::JoinSet, time::sleep};
 
-use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{hash_proto_block_ser, HashType}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, serialize_proto_block_prefilled}};
+use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{default_hash, hash_proto_block_ser, HashType}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, serialize_proto_block_prefilled}};
 use crate::rpc::MessageRef;
 use super::{logger::ClientWorkerStat, workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl}};
 
@@ -144,8 +144,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         }
                     } else {
 
-                        if req.executor_mode == Executor::Leader {
+                        if req.executor_mode == Executor::Leader && req.rate_control == RateControl::CloseLoop {
                             // If it is Executor::Any, it it probably a read request. There will be no byz commit.
+                            // There will be no reply for open loop requests either.
                             waiting_for_byz_response.insert(req.id, req.clone());
                         }
                     }
@@ -295,7 +296,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         (*ae_n, block_ser)
     }
 
-    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, id: usize) {
+    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, client_id: usize) {
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
@@ -305,7 +306,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         node_list.sort();
 
         let mut curr_leader_id = 0;
-        let mut curr_round_robin_id = id % node_list.len();
+        let mut curr_round_robin_id = client_id % node_list.len();
 
         let my_name = self.config.net_config.name.clone();
 
@@ -316,7 +317,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let max_inflight_requests = self.config.workload_config.max_concurrent_requests;
 
         let mut ae_n = 0;
-        let mut ae_parent_hash = HashType::default();
+        let mut ae_parent_hash = default_hash();
 
         let experiment_global_start = Instant::now();
         while experiment_global_start.elapsed() < duration {
@@ -331,6 +332,8 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     req.id = (total_requests + 1) as u64;
                     req.executor_mode = payload.executor;
                     req.rate_control = payload.rate_control;
+
+                    debug!("Client {} Sending {}", client_id, req.id);
 
                     let client_request = match payload.wrapper_mode {
                         WrapperMode::ClientRequest => {

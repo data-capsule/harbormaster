@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use psl::{client::{logger::{ClientStatLogger, ClientWorkerStat}, worker::ClientWorker, workload_generators::{BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::{Client, PinnedClient}, utils::channel::make_channel};
+use psl::{client::{logger::{ClientStatLogger, ClientWorkerStat}, worker::ClientWorker, workload_generators::{BlankAEWorkloadGenerator, BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, PerWorkerWorkloadGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::{Client, PinnedClient}, utils::channel::make_channel};
 use tokio::{sync::Mutex, task::JoinSet};
 
 #[global_allocator]
@@ -55,6 +55,11 @@ async fn main() -> std::io::Result<()> {
         match config.workload_config.request_config {
             RequestConfig::Blanks => {
                 let generator = BlankWorkloadGenerator{};
+                let worker = ClientWorker::new(config, client, generator, id, _stat_tx);
+                ClientWorker::launch(worker, &mut client_handles).await;
+            },
+            RequestConfig::AEBlanks(blank_config) => {
+                let generator = BlankAEWorkloadGenerator{ payload_size: blank_config.payload_size };
                 let worker = ClientWorker::new(config, client, generator, id, _stat_tx);
                 ClientWorker::launch(worker, &mut client_handles).await;
             },

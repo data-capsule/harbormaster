@@ -39,6 +39,9 @@ pub trait PerWorkerWorkloadGenerator: Send {
 mod blanks;
 pub use blanks::*;
 
+mod ae_blanks;
+pub use ae_blanks::*;
+
 mod kv_uniform;
 pub use kv_uniform::*;
 

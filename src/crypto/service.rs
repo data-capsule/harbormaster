@@ -47,7 +47,7 @@ impl CachedBlock {
 }
 
 // But no DerefMut, I don't want to allow mutation of the inner block.
-
+#[derive(Debug)]
 pub enum FutureHash {
     None,
     Immediate(HashType),
@@ -432,7 +432,19 @@ impl CryptoService {
                         FutureHash::None => default_hash(),
                         FutureHash::Immediate(val) => val,
                         FutureHash::Future(receiver) => receiver.await.unwrap(),
-                        FutureHash::FutureResult(receiver) => receiver.await.unwrap().unwrap(),
+                        FutureHash::FutureResult(receiver) => {
+                            let resp = receiver.await.unwrap();
+                            match resp {
+                                Ok(hsh) => hsh,
+                                Err(e) => {
+                                    warn!("Hash chain error: {} from {:?}", e, sender);
+                                    block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid parent hash"))).unwrap();
+                                    hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid parent hash")));
+                                    return_parent_hash.send(default_hash());
+                                    continue;
+                                }
+                            }
+                        }
                     };
                     let block_parent_hash = get_parent_hash_in_proto_block_ser(block_ser.as_ref());
                     // Hash parent check

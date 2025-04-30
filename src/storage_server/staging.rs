@@ -1,11 +1,11 @@
-use std::{io::Error, sync::Arc};
+use std::{io::Error, pin::Pin, sync::Arc};
 
 use hashbrown::HashMap;
-use log::{debug, error};
+use log::{debug, error, info, warn};
 use prost::Message as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::ProtoBackfillNack, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::ProtoBackfillNack, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
 
 use super::fork_receiver::ForkReceiverCommand;
 
@@ -16,10 +16,13 @@ pub struct Staging {
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>,
     logserver_tx: Sender<(SenderType, CachedBlock)>,
     gc_tx: Sender<(SenderType, u64)>,
+    gc_timer: Arc<Pin<Box<ResettableTimer>>>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
 
     last_confirmed_n: HashMap<SenderType, u64>,
 }
+
+const PER_PEER_BLOCK_WSS: u64 = 1000;
 
 impl Staging {
     pub fn new(
@@ -30,7 +33,9 @@ impl Staging {
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     ) -> Self {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
-
+        let gc_timer = ResettableTimer::new(
+            std::time::Duration::from_millis(config.get().app_config.checkpoint_interval_ms)
+        );
         Self {
             config,
             keystore,
@@ -41,21 +46,45 @@ impl Staging {
             client: client.into(),
 
             last_confirmed_n: HashMap::new(),
+            gc_timer,
         }
     }
 
     pub async fn run(staging: Arc<Mutex<Staging>>) {
         let mut staging = staging.lock().await;
 
-        while let Ok(_) = staging.worker().await {
+        staging.gc_timer.run().await;
 
+        while let Ok(_) = staging.worker().await {
+        
         }
 
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
-        let block_and_sender = self.block_rx.recv().await;
+        tokio::select! {
+            _tick = self.gc_timer.wait() => {
+                self.handle_gc().await?;
+            },
+            block_and_sender = self.block_rx.recv() => {
+                self.handle_block(block_and_sender).await?;
+            }
+        }
+        Ok(())
+    }
 
+    async fn handle_gc(&mut self) -> Result<(), ()> {
+        for (sender, last_n) in self.last_confirmed_n.iter() {
+            if *last_n > PER_PEER_BLOCK_WSS {
+                let _ = self.gc_tx.send((sender.clone(), *last_n - PER_PEER_BLOCK_WSS)).await;
+            }
+        }
+        Ok(())
+    }
+
+
+
+    async fn handle_block(&mut self, block_and_sender: Option<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>) -> Result<(), ()> {
         if block_and_sender.is_none() {
             return Err(());
         }
@@ -63,6 +92,7 @@ impl Staging {
         let (block, sender) = block_and_sender.unwrap();
 
         let block = block.await;
+        debug!("Received block {:?} from sender: {:?}", block, sender);
 
         if block.is_err() {
             return Err(());
@@ -142,9 +172,8 @@ impl Staging {
 
         let (name, _) = sender.to_name_and_sub_id();
 
-        let my_name = self.config.get().net_config.name.clone();
-        if name == my_name {
-            debug!("Voting on self. Dropping vote."); // Useful for local testing
+        if name.contains("client"){
+            debug!("Voting on test clients. Dropping vote."); // Useful for local testing
             return;
         }
 

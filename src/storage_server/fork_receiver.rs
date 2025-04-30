@@ -1,9 +1,11 @@
 use std::{collections::{HashMap, VecDeque}, io::Error, sync::Arc};
 
+use log::{debug, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::{client::{Client, PinnedClient}, SenderType}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
 
+#[derive(Debug)]
 pub struct ContinuityStats {
     pub block_n: u64,
     pub block_hash: FutureHash,
@@ -64,8 +66,10 @@ impl ForkReceiver {
         let mut fork_receiver = fork_receiver.lock().await;
 
         while let Ok(_) = fork_receiver.worker().await {
-
+            debug!("ForkReceiver: worker() returned Ok(())");
         }
+
+        warn!("ForkReceiver dying");
 
     }
 
@@ -73,8 +77,9 @@ impl ForkReceiver {
         let pending_cmds = self.cmd_rx.len();
         if pending_cmds > 0 {
             // Prefer clearing cmd_rx as fast as possible.
-            let mut cmds = Vec::new();
-            let _ = self.cmd_rx.recv_many(&mut cmds, pending_cmds);
+            let mut cmds = Vec::with_capacity(pending_cmds);
+            let received_len = self.cmd_rx.recv_many(&mut cmds, pending_cmds).await;
+            debug!("Only handling commands, pending_cmds = {}, received_len = {} or {}", pending_cmds, received_len, cmds.len());
 
             for cmd in cmds {
                 self.handle_command(cmd).await?;
@@ -84,7 +89,7 @@ impl ForkReceiver {
         }
 
         // Otherwise, wait for all.
-
+        debug!("ForkReceiver: waiting for AE or command");
         tokio::select! {
             Some((ae, sender)) = self.ae_rx.recv() => {
                 // Handle AppendEntries
@@ -153,11 +158,12 @@ impl ForkReceiver {
         if fork.serialized_blocks.len() == 0 {
             return Ok(());
         }
-        
+
         let stats = self.continuity_stats
             .entry(sender.clone())
             .or_insert(VecDeque::new());
-
+    
+        trace!("Getting AppendEntries from {:?}. stats = {:?}", sender, stats);        
         
         for block in fork.serialized_blocks.drain(..) {
             let _n = block.n;
