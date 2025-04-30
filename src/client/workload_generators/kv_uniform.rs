@@ -4,7 +4,7 @@ use rand::prelude::*;
 
 use crate::{config::KVReadWriteUniform, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-use super::{Executor, PerWorkerWorkloadGenerator, WorkloadUnit};
+use super::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode};
 
 #[derive(Clone)]
 enum TxOpType {
@@ -70,7 +70,9 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader
+            executor: Executor::Leader,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         };
 
         match next_op {

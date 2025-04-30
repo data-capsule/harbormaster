@@ -148,11 +148,19 @@ pub struct ClientRpcConfig {
 
 }
 
+const fn default_rate() -> f64 {
+    100_000.0
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
     pub duration: u64,
     pub max_concurrent_requests: usize,
+
+    #[serde(default = "default_rate")]
+    pub rate: f64, // in requests per second
+
     pub request_config: RequestConfig
 }
 

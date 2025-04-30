@@ -5,9 +5,9 @@ use nix::libc::stat;
 use prost::Message as _;
 use tokio::{sync::oneshot::error, task::JoinSet, time::sleep};
 
-use crate::{config::ClientConfig, proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
+use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{hash_proto_block_ser, HashType}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, serialize_proto_block_prefilled}};
 use crate::rpc::MessageRef;
-use super::{logger::ClientWorkerStat, workload_generators::{Executor, PerWorkerWorkloadGenerator}};
+use super::{logger::ClientWorkerStat, workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl}};
 
 pub struct ClientWorker<Gen: PerWorkerWorkloadGenerator> {
     config: ClientConfig,
@@ -23,6 +23,7 @@ struct CheckerTask {
     wait_from: String,
     id: u64,
     executor_mode: Executor,
+    rate_control: RateControl,
 }
 
 enum CheckerResponse {
@@ -35,6 +36,7 @@ struct OutstandingRequest {
     id: u64,
     payload: Vec<u8>,
     executor_mode: Executor,
+    rate_control: RateControl,
     last_sent_to: String,
     start_time: Instant
 }
@@ -46,6 +48,7 @@ impl OutstandingRequest {
             wait_from: self.last_sent_to.clone(),
             id: self.id,
             executor_mode: self.executor_mode.clone(),
+            rate_control: self.rate_control.clone(),
         }
     }
 
@@ -56,6 +59,7 @@ impl OutstandingRequest {
             last_sent_to: String::new(),
             start_time: Instant::now(),
             executor_mode: Executor::Any,
+            rate_control: RateControl::CloseLoop,
         }
     }
 }
@@ -92,6 +96,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let _client = worker.client.clone();
         let _stat_tx = worker.stat_tx.clone();
         let _backpressure_tx = backpressure_tx.clone();
+        let _config = worker.config.clone();
 
         let id = worker.id;
         js.spawn(async move {
@@ -101,8 +106,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 backpressure_tx.send(CheckerResponse::Success(0)).await.unwrap();
             }
 
+
             // Can't let the checker_task consume this worker (or lock it for indefinite time).
-            Self::checker_task(backpressure_tx, generator_rx, _client, _stat_tx, id).await;
+            Self::checker_task(_config, backpressure_tx, generator_rx, _client, _stat_tx, id).await;
         });
 
         js.spawn(async move {
@@ -111,10 +117,11 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
     }
 
-    async fn checker_task(backpressure_tx: Sender<CheckerResponse>, generator_rx: Receiver<CheckerTask>, client: PinnedClient, stat_tx: Sender<ClientWorkerStat>, id: usize) {
+    async fn checker_task(config: ClientConfig, backpressure_tx: Sender<CheckerResponse>, generator_rx: Receiver<CheckerTask>, client: PinnedClient, stat_tx: Sender<ClientWorkerStat>, id: usize) {
         let mut waiting_for_byz_response = HashMap::<u64, CheckerTask>::new();
         let mut out_of_order_byz_response = HashMap::<u64, Instant>::new();
         let mut alleged_leader = String::new();
+        let mut sleep_time = Duration::from_secs(1).div_f64(config.workload_config.rate);
         loop {
             match generator_rx.recv().await {
                 Some(req) => {
@@ -147,23 +154,50 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         let _ = stat_tx.send(ClientWorkerStat::ByzCommitPending(id, waiting_for_byz_response.len())).await;
                     }
                     
-                    // We will wait for the response.
-                    let res = PinnedClient::await_reply(&client, &req.wait_from).await;
-                    if res.is_err() {
-                        // We need to try again.
-                        let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
-                        continue;
-                    }
-                    let msg = res.unwrap();
-                    let sz = msg.as_ref().1;
-                    let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]);
-                    if resp.is_err() {
-                        // We need to try again.
-                        let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
-                        continue;
-                    }
 
-                    let resp = resp.unwrap();
+                    let resp = match req.rate_control {
+                        RateControl::CloseLoop => {
+                            // We will wait for the response.
+                            let res = PinnedClient::await_reply(&client, &req.wait_from).await;
+                            if res.is_err() {
+                                // We need to try again.
+                                let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
+                                continue;
+                            }
+                            let msg = res.unwrap();
+                            let sz = msg.as_ref().1;
+                            let resp = ProtoClientReply::decode(&msg.as_ref().0.as_slice()[..sz]);
+                            if resp.is_err() {
+                                // We need to try again.
+                                let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
+                                continue;
+                            }
+
+                            resp.unwrap()
+
+                        },
+                        RateControl::OpenLoop => {
+                            // Busy wait until sleep time.
+                            let sleep_start = Instant::now();
+                            while sleep_start.elapsed() < sleep_time {
+                            }
+
+                            // Frame a dummy success rate.
+                            let resp = ProtoClientReply {
+                                reply: Some(client::proto_client_reply::Reply::Receipt(ProtoTransactionReceipt {
+                                    req_digest: vec![],
+                                    block_n: 0,
+                                    tx_n: 0,
+                                    results: None,
+                                    await_byz_response: false,
+                                    byz_responses: vec![],
+                                })),
+                                client_tag: req.id,
+                            };
+
+                            resp
+                        },
+                    };
 
                     match resp.reply {
                         Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
@@ -240,6 +274,27 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         }
     }
 
+    fn get_serialized_ae_body(tx: &ProtoTransaction, ae_n: &mut u64, ae_parent_hash: &mut HashType) -> (u64, Vec<u8>) {
+        *ae_n += 1;
+        let tx = tx.to_owned();
+        let block = ProtoBlock {
+            tx_list: vec![tx],
+            n: *ae_n,
+            parent: ae_parent_hash.clone(),
+            view: 0,
+            qc: vec![],
+            fork_validation: vec![],
+            view_is_stable: true,
+            config_num: 0,
+            sig: None,
+        };
+
+        let block_ser = serialize_proto_block_prefilled(block);
+        *ae_parent_hash = hash_proto_block_ser(&block_ser);
+
+        (*ae_n, block_ser)
+    }
+
     async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, id: usize) {
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
@@ -260,6 +315,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut curr_complaining_requests = 0;
         let max_inflight_requests = self.config.workload_config.max_concurrent_requests;
 
+        let mut ae_n = 0;
+        let mut ae_parent_hash = HashType::default();
+
         let experiment_global_start = Instant::now();
         while experiment_global_start.elapsed() < duration {
             // Wait for the checker task to give a go-ahead.
@@ -272,13 +330,37 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let mut req = OutstandingRequest::default();
                     req.id = (total_requests + 1) as u64;
                     req.executor_mode = payload.executor;
-                    let client_request = ProtoPayload {
-                        message: Some(crate::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
-                            tx: Some(payload.tx),
-                            origin: my_name.clone(),
-                            sig: vec![0u8; 1],
-                            client_tag: req.id,
-                        }))
+                    req.rate_control = payload.rate_control;
+
+                    let client_request = match payload.wrapper_mode {
+                        WrapperMode::ClientRequest => {
+                            ProtoPayload {
+                                message: Some(crate::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
+                                    tx: Some(payload.tx),
+                                    origin: my_name.clone(),
+                                    sig: vec![0u8; 1],
+                                    client_tag: req.id,
+                                }))
+                            }
+                        },
+                        WrapperMode::AppendEntries => {
+                            let (n, serialized_body) = Self::get_serialized_ae_body(&payload.tx, &mut ae_n, &mut ae_parent_hash);
+                            ProtoPayload {
+                                message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ProtoAppendEntries {
+                                    fork: Some(ProtoFork {
+                                        serialized_blocks: vec![HalfSerializedBlock {
+                                            n, serialized_body,
+                                            view: 0, view_is_stable: true, config_num: 0,
+                                        }],
+                                    }),
+                                    commit_index: 0,
+                                    view: 0,
+                                    view_is_stable: true,
+                                    config_num: 0,
+                                    is_backfill_response: false,
+                                }))
+                            }
+                        },
                     };
 
                     req.payload = client_request.encode_to_vec();

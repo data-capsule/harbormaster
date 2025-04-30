@@ -8,7 +8,7 @@ use zipf::ZipfDistribution;
 
 use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
+use super::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode};
 
 /// This is enough for YCSB-A, B, C
 #[derive(Clone)]
@@ -164,7 +164,9 @@ impl KVReadWriteYCSBGenerator {
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader
+            executor: Executor::Leader,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         }
     }
 
@@ -292,7 +294,9 @@ impl KVReadWriteYCSBGenerator {
         };
 
         WorkloadUnit {
-            tx, executor
+            tx, executor,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         }
 
     }

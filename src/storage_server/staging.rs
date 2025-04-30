@@ -1,7 +1,7 @@
 use std::{io::Error, sync::Arc};
 
 use hashbrown::HashMap;
-use log::error;
+use log::{debug, error};
 use prost::Message as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
@@ -141,6 +141,12 @@ impl Staging {
         let sz = buf.len();
 
         let (name, _) = sender.to_name_and_sub_id();
+
+        let my_name = self.config.get().net_config.name.clone();
+        if name == my_name {
+            debug!("Voting on self. Dropping vote."); // Useful for local testing
+            return;
+        }
 
         let _ = PinnedClient::send(&self.client, &name,
             MessageRef(&buf, sz, &SenderType::Anon)
