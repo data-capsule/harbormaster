@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
+use std::pin::Pin;
 use runtime::{PSLRuntime, RequestHandler};
 
-
+#[no_mangle]
 pub extern "C" fn hello_world(
     request: *const runtime::RequestBody,
     response: *mut runtime::ResponseBody,
@@ -14,19 +13,23 @@ pub extern "C" fn hello_world(
     response.status = 200;
     response.body = "Hello, World!";
 
-    0 // Return 0 to indicate success
+    200
 }
 
-pub extern "C" fn setup() -> PSLRuntime {
-    let mut runtime = PSLRuntime {
-        request_handlers: HashMap::new(),
-    };
+
+#[no_mangle]
+pub extern "C" fn setup() -> Pin<Box<PSLRuntime<'static>>> {
+    let mut runtime = PSLRuntime::new();
 
     // Register the request handlers
-    runtime.request_handlers.insert(
-        "/hello".to_string(),
-        hello_world as RequestHandler,
-    );
+    runtime.num_handlers = 1;
+    runtime.request_url_paths = &["/hello"];
+    runtime.request_function_names = &["hello_world"];
 
-    runtime
+    Box::pin(runtime)
+}
+
+#[no_mangle]
+pub extern "C" fn hello() {
+    println!("Hello from Rust!");
 }
