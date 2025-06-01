@@ -109,6 +109,7 @@ evil = []
 extra_2pc = []
 no_pipeline = []
 extra_qc_check = []
+gossip = []
 
 # Applications
 app_logger = []
@@ -123,7 +124,7 @@ jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 hotstuff = ["round_robin_leader", "always_sign", "view_change", "no_pipeline", "extra_qc_check"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
-default = ["pirateship", "app_logger", "storage", "fast_path", "platforms"]
+default = ["pirateship", "app_logger", "storage", "fast_path", "platforms", "gossip"]
 # default = ["jolteon", "app_logger", "storage"]
 # default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
 

@@ -4,7 +4,8 @@ use hashbrown::HashMap;
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{oneshot, Mutex};
-use crate::{crypto::{hash, CachedBlock, HashType}, proto::execution::{ProtoTransaction, ProtoTransactionOpType}, rpc::SenderType, utils::channel::{Receiver, Sender}};
+use crate::{crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, utils::channel::{Receiver, Sender}};
+
 
 #[derive(Error, Debug)]
 pub enum CacheError {
@@ -30,6 +31,33 @@ pub enum CacheCommand {
         u64 /* Expected SeqNum */,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     )
+}
+
+pub enum SequencerCommand {
+    // Write Op from myself
+    SelfWriteOp {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        seq_num: u64,
+    },
+
+    // Write Op from other node, that I propagate
+    OtherWriteOp {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        seq_num: u64,
+    },
+
+    // Advance the vector clock in the sequencer.
+    AdvanceVC {
+        sender: SenderType,
+        block_seq_num: u64
+    },
+
+    // Blocks can only be formed on receiving this token.
+    // Helps maintain atomicity.
+    // (Doesn't mean it is forced to form a block, just that it can)
+    MakeNewBlock,
 }
 
 #[derive(Clone)]
@@ -167,6 +195,7 @@ pub type CacheKey = Vec<u8>;
 pub struct CacheManager {
     command_rx: Receiver<CacheCommand>,
     block_rx: Receiver<(SenderType, CachedBlock)>,
+    block_sequencer_tx: Sender<SequencerCommand>,
     cache: HashMap<CacheKey, CachedValue>,
 }
 
@@ -174,10 +203,12 @@ impl CacheManager {
     pub fn new(
         command_rx: Receiver<CacheCommand>,
         block_rx: Receiver<(SenderType, CachedBlock)>,
+        block_sequencer_tx: Sender<SequencerCommand>,
     ) -> Self {
         Self {
             command_rx,
             block_rx,
+            block_sequencer_tx,
             cache: HashMap::new(),
         }
     }
@@ -210,16 +241,20 @@ impl CacheManager {
                 let _ = response_tx.send(res.ok_or(CacheError::KeyNotFound));
             }
             CacheCommand::Put(key, value, response_tx) => {
+                
                 if self.cache.contains_key(&key) {
-                    let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value);
+                    let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone());
                     response_tx.send(Ok(seq_num)).unwrap();
-
+                    
+                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value, seq_num }).await;
                     return;
                 }
 
-                let cached_value = CachedValue::new(value);
+                let cached_value = CachedValue::new(value.clone());
                 self.cache.insert(key.clone(), cached_value);
                 response_tx.send(Ok(1)).unwrap();
+                self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value, seq_num: 1 }).await;
+
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();
@@ -253,13 +288,45 @@ impl CacheManager {
 
                 let cached_value = cached_value.unwrap();
 
-                if self.cache.contains_key(key) {
-                    self.cache.get_mut(key).unwrap().merge_cached(cached_value).unwrap();
+                // If this put request leads to an update,
+                // It should be propagated downstream in the gossip/multicast tree,
+                // As they may or may not receive the update directly.
+                let (should_propagate, seq_num) = if self.cache.contains_key(key) {
+                    let res = self.cache.get_mut(key).unwrap().merge_cached(cached_value);
+                    match res {
+                        Ok(seq_num) => (true, seq_num),
+                        Err(_old_seq_num) => (false, 0 /* doesn't matter */)
+                    }
                 } else {
+                    let seq_num = cached_value.seq_num;
                     self.cache.insert(key.clone(), cached_value);
+                    (true, seq_num)
+                };
+
+                #[cfg(not(feature = "gossip"))]
+                let should_propagate = false;
+
+                if should_propagate {
+                    self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp {
+                        key: key.clone(),
+                        value: value.clone(),
+                        seq_num,
+                    }).await;
                 }
             }
         }
+
+        // Advance the vector clock in the sequencer.
+        let block_seq_num = block.block.n;
+        self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
+            sender,
+            block_seq_num,
+        }).await;
+
+
+        // A new block can be formed now.
+        self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+
     }
 }
 
