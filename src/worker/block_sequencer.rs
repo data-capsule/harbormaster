@@ -1,24 +1,23 @@
 use std::ops::{Deref, DerefMut};
 
 use hashbrown::HashMap;
+use tokio::sync::oneshot;
 
-use crate::{config::AtomicConfig, crypto::{CryptoServiceConnector, FutureHash, HashType}, rpc::SenderType, utils::channel::Receiver};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::{consensus::ProtoBlock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}}, rpc::SenderType, utils::channel::{Receiver, Sender}};
 
-use super::cache_manager::CacheKey;
+use super::cache_manager::{CacheKey, CachedValue};
 
 pub enum SequencerCommand {
     /// Write Op from myself
     SelfWriteOp {
-        key: Vec<u8>,
-        value: Vec<u8>,
-        seq_num: u64,
+        key: CacheKey,
+        value: CachedValue,
     },
 
     /// Write Op from other node, that I propagate
     OtherWriteOp {
-        key: Vec<u8>,
-        value: Vec<u8>,
-        seq_num: u64,
+        key: CacheKey,
+        value: CachedValue,
     },
 
     /// Advance the vector clock in the sequencer.
@@ -74,35 +73,44 @@ pub struct BlockSequencer {
 
     curr_block_seq_num: u64,
     last_block_hash: FutureHash,
-    self_write_op_bag: Vec<(CacheKey, Vec<u8>, u64)>,
-    all_write_op_bag: Vec<(CacheKey, Vec<u8>, u64)>,
+    self_write_op_bag: Vec<(CacheKey, CachedValue)>,
+    all_write_op_bag: Vec<(CacheKey, CachedValue)>,
     curr_vector_clock: VectorClock,
 
     cache_manager_rx: Receiver<SequencerCommand>,
+
+    node_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
+    storage_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
 }
 
 impl BlockSequencer {
-    pub fn new(config: AtomicConfig, crypto: CryptoServiceConnector, cache_manager_rx: Receiver<SequencerCommand>) -> Self {
+    pub fn new(config: AtomicConfig, crypto: CryptoServiceConnector,
+        cache_manager_rx: Receiver<SequencerCommand>,
+        node_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
+        storage_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
+    ) -> Self {
         Self {
             config, crypto,
-            curr_block_seq_num: 0,
+            curr_block_seq_num: 1,
             last_block_hash: FutureHash::Immediate(HashType::default()),
             self_write_op_bag: Vec::new(),
             all_write_op_bag: Vec::new(),
             curr_vector_clock: VectorClock::new(),
             cache_manager_rx,
+            node_broadcaster_tx,
+            storage_broadcaster_tx,
         }
     }
 
     pub async fn run(&mut self) {
         while let Some(command) = self.cache_manager_rx.recv().await {
             match command {
-                SequencerCommand::SelfWriteOp { key, value, seq_num } => {
-                    self.self_write_op_bag.push((key.clone(), value.clone(), seq_num));
-                    self.all_write_op_bag.push((key, value, seq_num));
+                SequencerCommand::SelfWriteOp { key, value } => {
+                    self.self_write_op_bag.push((key.clone(), value.clone()));
+                    self.all_write_op_bag.push((key, value));
                 },
-                SequencerCommand::OtherWriteOp { key, value, seq_num } => {
-                    self.all_write_op_bag.push((key, value, seq_num));
+                SequencerCommand::OtherWriteOp { key, value } => {
+                    self.all_write_op_bag.push((key, value));
                 },
                 SequencerCommand::AdvanceVC { sender, block_seq_num } => {
                     self.curr_vector_clock.advance(sender, block_seq_num);
@@ -124,26 +132,84 @@ impl BlockSequencer {
             return; // Not enough writes to form a block
         }
 
-        let all_writes = Self::dedup_vec(self.all_write_op_bag.drain(..));
-        let self_writes = Self::dedup_vec(self.self_write_op_bag.drain(..));
+        let seq_num = self.curr_block_seq_num;
+        self.curr_block_seq_num += 1;
 
-        // TODO: Directly send the all_writes block to the gossip broadacaster.
+        let all_writes = Self::wrap_vec(
+            Self::dedup_vec(self.all_write_op_bag.drain(..)),
+            seq_num,
+        );
 
-        // TODO: Send self_writes to crypto and the resulting future to storage broadcaster.
+        let self_writes = Self::wrap_vec(
+            Self::dedup_vec(self.self_write_op_bag.drain(..)),
+            seq_num,
+        );
+
+
+        let (all_writes_rx, _, _) = self.crypto.prepare_block(
+            all_writes,
+            false,
+            FutureHash::Immediate(HashType::default())
+        ).await;
+
+        let parent_hash_rx = self.last_block_hash.take();
+        let (self_writes_rx, hash_rx, hash_rx2) = self.crypto.prepare_block(
+            self_writes,
+            true,
+            parent_hash_rx,
+        ).await;
+        self.last_block_hash = FutureHash::Future(hash_rx);
+
+        // Nodes get all writes so as to virally send writes from other nodes.
+        self.node_broadcaster_tx.send(all_writes_rx).await;
+
+        // Storage only gets self writes.
+        // Strong convergence will ensure that the checkpoint state matches the state using all_writes above.
+        // Same VC => Same state.
+        self.storage_broadcaster_tx.send(self_writes_rx).await;
+
+        // TODO: Send hash_rx2 to client reply handler.
     }
 
-    fn dedup_vec(vec: std::vec::Drain<(CacheKey, Vec<u8>, u64)>) -> Vec<(CacheKey, Vec<u8>, u64)> {
+    fn wrap_vec(
+        writes: Vec<(CacheKey, CachedValue)>,
+        seq_num: u64,
+    ) -> ProtoBlock {
+        ProtoBlock {
+            tx_list: writes.into_iter()
+                .map(|(key, value)| ProtoTransaction {
+                    on_receive: None,
+                    on_crash_commit: Some(ProtoTransactionPhase {
+                        ops: vec![ProtoTransactionOp { 
+                            op_type: ProtoTransactionOpType::Write as i32,
+                            operands: vec![key, bincode::serialize(&value).unwrap()], 
+                        }],
+                    }),
+                    on_byzantine_commit: None,
+                    is_reconfiguration: false,
+                    is_2pc: false,
+                })
+                .collect(),
+            n: seq_num,
+            parent: vec![],
+            view: 0,
+            qc: vec![],
+            fork_validation: vec![],
+            view_is_stable: true,
+            config_num: 1,
+            sig: None,
+        }
+    }
+
+    fn dedup_vec(vec: std::vec::Drain<(CacheKey, CachedValue)>) -> Vec<(CacheKey, CachedValue)> {
         let mut seen = HashMap::new();
 
-        for (key, value, seq_num) in vec {
-            let entry = seen.entry(key).or_insert((value.clone(), seq_num));
+        for (key, value) in vec {
+            let entry = seen.entry(key).or_insert(value.clone());
 
-            if entry.1 < seq_num {
-                entry.0 = value;
-                entry.1 = seq_num;
-            }
+            entry.merge_cached(value);
         }
 
-        seen.into_iter().map(|(key, (value, seq_num))| (key, value, seq_num)).collect()
+        seen.into_iter().collect()
     }
 }

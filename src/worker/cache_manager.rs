@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::HashMap;
+use log::warn;
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{oneshot, Mutex};
@@ -86,8 +87,8 @@ impl CacheConnector {
 
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct CachedValue {
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct CachedValue {
     value: Vec<u8>,
     seq_num: u64,
     val_hash: BigInt,
@@ -97,11 +98,15 @@ impl CachedValue {
 
     /// Completely new value, with seq_num = 1
     pub fn new(value: Vec<u8>) -> Self {
+        Self::new_with_seq_num(value, 1)
+    }
+
+    pub fn new_with_seq_num(value: Vec<u8>, seq_num: u64) -> Self {
         let val_hash = hash(&value);
         let val_hash = BigInt::from_bytes_be(Sign::NoSign, &val_hash);
         Self {
             value,
-            seq_num: 1,
+            seq_num,
             val_hash,
         }
     }
@@ -220,14 +225,14 @@ impl CacheManager {
                     let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone());
                     response_tx.send(Ok(seq_num)).unwrap();
                     
-                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value, seq_num }).await;
+                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num) }).await;
                     return;
                 }
 
                 let cached_value = CachedValue::new(value.clone());
                 self.cache.insert(key.clone(), cached_value);
                 response_tx.send(Ok(1)).unwrap();
-                self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value, seq_num: 1 }).await;
+                self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value) }).await;
 
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
@@ -254,26 +259,32 @@ impl CacheManager {
 
                 let key = &op.operands[0];
                 let value = &op.operands[1];
-
+                
                 let cached_value = bincode::deserialize::<CachedValue>(&value);
                 if cached_value.is_err() {
+                    warn!("Failed to deserialize cached value: {:?}", value);
                     continue;
                 }
-
                 let cached_value = cached_value.unwrap();
+
+                // let cached_value = CachedValue {
+                //     value,
+                //     seq_num,
+
+                // };
 
                 // If this put request leads to an update,
                 // It should be propagated downstream in the gossip/multicast tree,
                 // As they may or may not receive the update directly.
                 let (should_propagate, seq_num) = if self.cache.contains_key(key) {
-                    let res = self.cache.get_mut(key).unwrap().merge_cached(cached_value);
+                    let res = self.cache.get_mut(key).unwrap().merge_cached(cached_value.clone());
                     match res {
                         Ok(seq_num) => (true, seq_num),
                         Err(_old_seq_num) => (false, 0 /* doesn't matter */)
                     }
                 } else {
                     let seq_num = cached_value.seq_num;
-                    self.cache.insert(key.clone(), cached_value);
+                    self.cache.insert(key.clone(), cached_value.clone());
                     (true, seq_num)
                 };
 
@@ -283,8 +294,7 @@ impl CacheManager {
                 if should_propagate {
                     self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp {
                         key: key.clone(),
-                        value: value.clone(),
-                        seq_num,
+                        value: cached_value,
                     }).await;
                 }
             }

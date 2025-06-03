@@ -1,6 +1,5 @@
 use std::{future::Future, sync::Arc};
 
-use crossbeam::deque::Worker;
 use tokio::{sync::Mutex, task::JoinSet};
 
 use crate::{config::AtomicConfig, consensus::batch_proposal::TxWithAckChanTag, utils::channel::{Receiver, Sender}};
