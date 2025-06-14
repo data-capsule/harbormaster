@@ -14,6 +14,7 @@ pub enum Executor {
 pub enum WrapperMode {
     ClientRequest = 1,
     AppendEntries = 2,
+    AppendEntriesWithSignature = 3,
 }
 
 /// How to pace requests?

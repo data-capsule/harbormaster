@@ -9,6 +9,7 @@ pub enum ClientWorkerStat {
     CrashCommitLatency(Duration),
     ByzCommitLatency(Duration),
     ByzCommitPending(usize /* client_id */, usize /* pending size */),
+    SignedAE,
 }
 
 pub struct ClientStatLogger {
@@ -22,6 +23,8 @@ pub struct ClientStatLogger {
     byz_commit_latency_window: VecDeque<(Instant, Duration)>,
 
     byz_commit_pending_per_worker: HashMap<usize, usize>,
+
+    total_signed_aes: usize,
 }
 
 impl ClientStatLogger {
@@ -35,6 +38,7 @@ impl ClientStatLogger {
             byz_commit_latency_window: VecDeque::new(),
             byz_commit_pending_per_worker: HashMap::new(),
             max_duration,
+            total_signed_aes: 0,
         }
     }
 
@@ -88,6 +92,9 @@ impl ClientStatLogger {
             }
             ClientWorkerStat::ByzCommitPending(id, pending) => {
                 self.byz_commit_pending_per_worker.insert(id, pending);
+            },
+            ClientWorkerStat::SignedAE => {
+                self.total_signed_aes += 1;
             }
         }
     }
@@ -118,6 +125,10 @@ impl ClientStatLogger {
         let min_pending = self.byz_commit_pending_per_worker.iter().map(|(_, pending)| *pending).min().unwrap_or(0);
 
         info!("Total Byz commit pending: {}, Max pending: {}, Min pending: {}", total_pending, max_pending, min_pending);
+    
+        if self.total_signed_aes > 0 {
+            info!("Total signed requests: {}", self.total_signed_aes);
+        }
     }
 }
 

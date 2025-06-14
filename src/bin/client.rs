@@ -59,7 +59,7 @@ async fn main() -> std::io::Result<()> {
                 ClientWorker::launch(worker, &mut client_handles).await;
             },
             RequestConfig::AEBlanks(blank_config) => {
-                let generator = BlankAEWorkloadGenerator{ payload_size: blank_config.payload_size };
+                let generator = BlankAEWorkloadGenerator::new(blank_config.payload_size, blank_config.signature_interval);
                 let worker = ClientWorker::new(config, client, generator, id, _stat_tx);
                 ClientWorker::launch(worker, &mut client_handles).await;
             },

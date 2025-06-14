@@ -1,11 +1,13 @@
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 
+use ed25519_dalek::SIGNATURE_LENGTH;
 use log::{debug, error, info, trace};
 use nix::libc::stat;
 use prost::Message as _;
+use sha2::{Digest, Sha512};
 use tokio::{sync::oneshot::error, task::JoinSet, time::sleep};
 
-use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{default_hash, hash_proto_block_ser, HashType}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, serialize_proto_block_prefilled}};
+use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{default_hash, hash, hash_proto_block_ser, AtomicKeyStore, HashType, KeyStore, DIGEST_LENGTH}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, serialize_proto_block_prefilled, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
 use crate::rpc::MessageRef;
 use super::{logger::ClientWorkerStat, workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl}};
 
@@ -98,6 +100,13 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let _backpressure_tx = backpressure_tx.clone();
         let _config = worker.config.clone();
 
+        let __config = _config.fill_missing();
+        let keystore = KeyStore::new(
+            &__config.rpc_config.allowed_keylist_path,
+            &__config.rpc_config.signing_priv_key_path,
+        );
+        let keystore = AtomicKeyStore::new(keystore);
+
         let id = worker.id;
         js.spawn(async move {
             // Fill the backpressure channel with `Success` messages.
@@ -112,7 +121,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         });
 
         js.spawn(async move {
-            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx, id).await;
+            worker.generator_task(generator_tx, backpressure_rx, _backpressure_tx, id, keystore).await;
         });
 
     }
@@ -275,13 +284,13 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         }
     }
 
-    fn get_serialized_ae_body(tx: &ProtoTransaction, ae_n: &mut u64, ae_parent_hash: &mut HashType) -> (u64, Vec<u8>) {
+    fn get_serialized_ae_body(tx: &ProtoTransaction, ae_n: &mut u64, ae_parent_hash: &mut HashType, must_sign: bool, keystore: &AtomicKeyStore) -> (u64, Vec<u8>) {
         *ae_n += 1;
         let tx = tx.to_owned();
         let block = ProtoBlock {
             tx_list: vec![tx],
             n: *ae_n,
-            parent: ae_parent_hash.clone(),
+            parent: vec![],
             view: 0,
             qc: vec![],
             fork_validation: vec![],
@@ -290,13 +299,31 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
             sig: None,
         };
 
-        let block_ser = serialize_proto_block_prefilled(block);
-        *ae_parent_hash = hash_proto_block_ser(&block_ser);
+        let mut buf = serialize_proto_block_nascent(&block).unwrap();
 
-        (*ae_n, block_ser)
+        let mut hasher = Sha512::new();
+        hasher.update(&buf[DIGEST_LENGTH+SIGNATURE_LENGTH..]);
+        update_parent_hash_in_proto_block_ser(&mut buf, &ae_parent_hash);
+
+        hasher.update(&buf[SIGNATURE_LENGTH..SIGNATURE_LENGTH+DIGEST_LENGTH]);
+        if must_sign {
+            // Signature is on the (parent_hash || block) part of the serialized block.
+            let partial_hsh = hash(&buf[SIGNATURE_LENGTH..]);
+            let keystore = keystore.get();
+            let sig = keystore.sign(&partial_hsh);
+            update_signature_in_proto_block_ser(&mut buf, &sig);
+        }
+
+        hasher.update(&buf[..SIGNATURE_LENGTH]);
+
+        let hsh = hasher.finalize().to_vec();
+
+        *ae_parent_hash = hsh;
+
+        (*ae_n, buf)
     }
 
-    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, client_id: usize) {
+    async fn generator_task(&mut self, generator_tx: Sender<CheckerTask>, backpressure_rx: Receiver<CheckerResponse>, backpressure_tx: Sender<CheckerResponse>, client_id: usize, keystore: AtomicKeyStore) {
         let mut outstanding_requests = HashMap::<u64, OutstandingRequest>::new();
 
         let mut total_requests = 0;
@@ -346,8 +373,15 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                                 }))
                             }
                         },
-                        WrapperMode::AppendEntries => {
-                            let (n, serialized_body) = Self::get_serialized_ae_body(&payload.tx, &mut ae_n, &mut ae_parent_hash);
+                        WrapperMode::AppendEntries | WrapperMode::AppendEntriesWithSignature => {
+                            let (n, serialized_body) = Self::get_serialized_ae_body(
+                                &payload.tx, &mut ae_n, &mut ae_parent_hash, 
+                                payload.wrapper_mode == WrapperMode::AppendEntriesWithSignature,
+                                &keystore,
+                            );
+                            if payload.wrapper_mode == WrapperMode::AppendEntriesWithSignature {
+                                self.stat_tx.send(ClientWorkerStat::SignedAE).await.unwrap();
+                            }
                             ProtoPayload {
                                 message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ProtoAppendEntries {
                                     fork: Some(ProtoFork {

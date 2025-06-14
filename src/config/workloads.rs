@@ -28,10 +28,17 @@ pub struct Blanks {
 
     #[serde(default = "default_payload_size")]
     pub payload_size: usize,
+
+    #[serde(default = "default_signature_interval")]
+    pub signature_interval: usize,
 }
 
 const fn default_payload_size() -> usize {
     512
+}
+
+const fn default_signature_interval() -> usize {
+    usize::MAX
 }
 
 

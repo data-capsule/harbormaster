@@ -27,6 +27,9 @@ pub struct KeyStore {
 impl KeyStore {
     pub fn get_pubkeys(pubkey_path: &String) -> HashMap<String, VerifyingKey> {
         let mut keys = HashMap::new();
+        if pubkey_path.is_empty() {
+            return keys;
+        }
         let key_path = path::Path::new(pubkey_path.as_str());
         if !key_path.exists() {
             panic!("Invalid Public Key Path: {}", pubkey_path);
