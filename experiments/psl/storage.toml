@@ -52,16 +52,16 @@ client_max_retry = 10
 
 [client_config.workload_config]
 max_concurrent_requests = 1
-rate = 1_000.0 # 1000 requests per second input rate.
+rate = 100.0 # 100 requests per second input rate.
 
 
 [client_config.workload_config.request_config.AEBlanks]
 payload_size = 1_048_576 # 1 MiB
-signature_interval = 1
+
 
 
 [[experiments]]
-name = "psl_storage"
+name = "storage_sig_1"
 type = "psl_storage"
 repeats = 1
 num_nodes = 1 # This is fixed for this experiment.
@@ -69,24 +69,92 @@ node_distribution = "uniform"
 build_command = "make"
 duration = 60
 
+[experiments.client_config.workload_config.request_config.AEBlanks]
+signature_interval = 1
+
 [experiments.sweeping_parameters]
-# num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
-num_clients = [1]
+num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
+
+
+[[experiments]]
+name = "storage_sig_2"
+type = "psl_storage"
+repeats = 1
+num_nodes = 1 # This is fixed for this experiment.
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.client_config.workload_config.request_config.AEBlanks]
+signature_interval = 2
+
+[experiments.sweeping_parameters]
+num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
+
+
+
+[[experiments]]
+name = "storage_sig_10"
+type = "psl_storage"
+repeats = 1
+num_nodes = 1 # This is fixed for this experiment.
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.client_config.workload_config.request_config.AEBlanks]
+signature_interval = 10
+
+[experiments.sweeping_parameters]
+num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
+
+[[experiments]]
+name = "storage_sig_20"
+type = "psl_storage"
+repeats = 1
+num_nodes = 1 # This is fixed for this experiment.
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.client_config.workload_config.request_config.AEBlanks]
+signature_interval = 20
+
+[experiments.sweeping_parameters]
+num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
+
+
+[[experiments]]
+name = "storage_sig_inf"
+type = "psl_storage"
+repeats = 1
+num_nodes = 1 # This is fixed for this experiment.
+node_distribution = "uniform"
+build_command = "make"
+duration = 60
+
+[experiments.client_config.workload_config.request_config.AEBlanks]
+signature_interval = 1000000000
+
+[experiments.sweeping_parameters]
+num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
 
 
 
 [[results]]
-name = "tput_rw_sweep"
-plotter = "stacked_bar_graph"
-ramp_up = 15
-ramp_down = 15
-output = "ycsb.pdf"
-xlabels = ["0", "0.25", "0.5", "0.75", "1"]
-xtitle = "Read Ratio"
-# xlabels = ["25R-75W", "50R-50W"]
+name = "throughput_client_sweep"
+plotter = "throughput_client_sweep"
+ramp_up = 0
+ramp_down = 0
+output = "storage.pdf"
 force_parse = true
-output_width = 15
+
+# input_rate_slope = 100.0 # 100 rps x 1 MiB = 100 MiB/s
+
 
 [results.legends]
-pirateship = "pirateship"
-signed_raft = "signed_raft"
+storage_sig_1 = "sig\\_interval=1"
+storage_sig_2 = "sig\\_interval=2"
+storage_sig_10 = "sig\\_interval=10"
+storage_sig_20 = "sig\\_interval=20"
+storage_sig_inf = "sig\\_interval=$\\infty$"

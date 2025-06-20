@@ -43,6 +43,8 @@ node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total unlogged txs: ([0-9]+)")
 # Sample log: [INFO][psl::client::logger][2025-02-25T23:33:23.145307984+00:00] Average Crash commit latency: 104390 us, Average Byz commit latency: 29271247 us
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: ([0-9]+) us, Average Byz commit latency: ([0-9]+) us")
 
+# Sample log: [INFO][psl::storage_server::logserver][2025-06-14T01:17:15.208949993+00:00] Total blocks stored: 1062 blocks or 1062.1507863998413 MiB
+storage_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total blocks stored: ([0-9]+) blocks or ([0-9.]+) MiB")
 
 def process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
     '''
@@ -1190,3 +1192,133 @@ class Result:
 
     def output(self):
         self.plotter_func()
+
+
+    def throughput_client_sweep(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        legends = self.kwargs.get('legends', {})
+        force_parse = self.kwargs.get('force_parse', False)
+
+        # Try to fetch plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.throughput_client_sweep_parse(ramp_up, ramp_down, legends)
+
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
+
+        output = self.kwargs.get('output', None)
+        self.throughput_client_sweep_plot(plot_dict, output)
+
+    def throughput_client_sweep_parse(self, ramp_up, ramp_down, legends):
+        plot_dict = defaultdict(dict)
+
+        # Which indices do I skip?
+        skip_indices = self.kwargs.get('skip_indices', [])
+
+        summary_file = os.path.join(self.workdir, "summary.txt")
+        summary_file = open(summary_file, "w")
+
+        # Find parsing log files for each group
+        for group_name, experiments in self.experiment_groups.items():
+            if group_name not in legends:
+                continue
+
+            print("========", group_name, "========")
+            experiments.sort(key=lambda x: x.seq_num)
+
+            print("========", legends[group_name], "========", file=summary_file)
+
+            # Find parsing log files for each experiment
+            for j, experiment in enumerate(experiments):
+                if j in skip_indices:
+                    continue
+
+                # Find node1.log in the experiment's workdir
+                node1_log = os.path.join(experiment.local_workdir, "logs", "0", "node1.log")
+                if not os.path.exists(node1_log):
+                    print(f"Warning: {node1_log} does not exist")
+                    continue
+
+                # Parse the log file
+                log_lines = []
+                with open(node1_log, "r") as f:
+                    for line in f:
+                        match = storage_rgx.match(line)
+                        if match:
+                            log_lines.append((isoparse(match.group(1)), int(match.group(2)), float(match.group(3))))
+
+                # Sort log lines by time
+                log_lines.sort(key=lambda x: x[0])
+
+                start_time = log_lines[0][0] + datetime.timedelta(seconds=ramp_up)
+                end_time = log_lines[-1][0] + datetime.timedelta(seconds=ramp_down)
+
+                # Filter blocks based on start and end time
+                filtered_blocks = [block for block in log_lines if start_time <= block[0] <= end_time]
+
+                # Get the total blocks stored
+                total_bytes = filtered_blocks[-1][2] - filtered_blocks[0][2]
+
+                total_time = end_time - start_time
+
+                # Get the throughput
+                throughput = total_bytes / total_time.total_seconds()
+                num_clients = experiment.num_clients
+
+                print("Throughput:", throughput, "MiB/s", "for", num_clients, "clients", file=summary_file)
+
+                plot_dict[legends[group_name]][num_clients] = throughput
+
+
+        summary_file.close()
+        return plot_dict
+    
+    def throughput_client_sweep_plot(self, plot_dict, output):
+        xticks = list(plot_dict[list(plot_dict.keys())[0]].keys())
+        xticks_list = [str(x) for x in xticks]
+        xticks_pos = [x for x in xticks]
+
+        y_max = max(max(data.values()) for data in plot_dict.values()) + 10
+        
+        
+        font = self.kwargs.get('font', {
+            'size'   : 65
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+
+        plt.figure(figsize=(30, 12))
+
+        # Plot the throughput for each group
+        markers = ['o', 's', 'D', 'v', '^', 'P', 'H', 'X', 'd', '1']
+        for i, (group_name, data) in enumerate(plot_dict.items()):
+            plt.plot(data.keys(), data.values(), label=group_name, marker=markers[i], markersize=10, linewidth=5)
+
+
+        input_rate_slope = self.kwargs.get('input_rate_slope', None)
+        if input_rate_slope:
+            input_rate_y = [x * input_rate_slope for x in xticks]
+            plt.plot(xticks, input_rate_y, linewidth=5, linestyle='--', color='black')
+
+        plt.xlabel("Number of Hash Chains", fontsize=font['size'])
+        plt.ylabel("Throughput (MiB/s)", fontsize=font['size'])
+
+        plt.xscale('log')
+        plt.xticks(xticks_pos, xticks_list, fontsize=font['size'])
+        
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=(len(plot_dict) + 1)//2, fontsize=font['size'])
+        plt.grid()
+
+        plt.ylim(0, y_max)
+
+        output_path = os.path.join(self.workdir, output)
+        plt.savefig(output_path, bbox_inches='tight')
