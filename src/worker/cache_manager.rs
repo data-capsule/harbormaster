@@ -31,7 +31,8 @@ pub enum CacheCommand {
         Vec<u8> /* Value */,
         u64 /* Expected SeqNum */,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
-    )
+    ),
+    CommitProbe(u64 /* seq_num */),
 }
 
 
@@ -176,6 +177,8 @@ pub struct CacheManager {
     block_rx: Receiver<(SenderType, CachedBlock)>,
     block_sequencer_tx: Sender<SequencerCommand>,
     cache: HashMap<CacheKey, CachedValue>,
+
+    last_committed_seq_num: u64,
 }
 
 impl CacheManager {
@@ -189,6 +192,7 @@ impl CacheManager {
             block_rx,
             block_sequencer_tx,
             cache: HashMap::new(),
+            last_committed_seq_num: 0,
         }
     }
 
@@ -218,6 +222,8 @@ impl CacheManager {
             CacheCommand::Get(key, response_tx) => {
                 let res = self.cache.get(&key).map(|v| (v.value.clone(), v.seq_num));
                 let _ = response_tx.send(res.ok_or(CacheError::KeyNotFound));
+
+                // TODO: Fill from checkpoint if key not found.
             }
             CacheCommand::Put(key, value, response_tx) => {
                 

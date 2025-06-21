@@ -7,11 +7,17 @@ use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, 
 
 use super::cache_manager::{CacheKey, CachedValue};
 
+pub enum BlockSeqNumQuery {
+    DontBother,
+    WaitForSeqNum(oneshot::Sender<u64>),
+}
+
 pub enum SequencerCommand {
     /// Write Op from myself
     SelfWriteOp {
         key: CacheKey,
         value: CachedValue,
+        seq_num_query: BlockSeqNumQuery,
     },
 
     /// Write Op from other node, that I propagate
@@ -61,8 +67,8 @@ impl VectorClock {
         }
     }
 
-    pub fn get(&self, sender: &SenderType) -> Option<&u64> {
-        self.0.get(sender)
+    pub fn get(&self, sender: &SenderType) -> u64 {
+        *self.0.get(sender).unwrap_or(&0)
     }
 }
 
@@ -105,9 +111,16 @@ impl BlockSequencer {
     pub async fn run(&mut self) {
         while let Some(command) = self.cache_manager_rx.recv().await {
             match command {
-                SequencerCommand::SelfWriteOp { key, value } => {
+                SequencerCommand::SelfWriteOp { key, value, seq_num_query } => {
                     self.self_write_op_bag.push((key.clone(), value.clone()));
                     self.all_write_op_bag.push((key, value));
+
+                    match seq_num_query {
+                        BlockSeqNumQuery::DontBother => {}
+                        BlockSeqNumQuery::WaitForSeqNum(sender) => {
+                            sender.send(self.curr_block_seq_num).unwrap();
+                        }
+                    }
                 },
                 SequencerCommand::OtherWriteOp { key, value } => {
                     self.all_write_op_bag.push((key, value));
