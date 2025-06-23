@@ -6,13 +6,16 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, consensus::{batch_proposal::TxWithAckChanTag, fork_receiver::ForkReceiver}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillNack, client::ProtoClientRequest, consensus::{ProtoAppendEntries, ProtoVote}, rpc::ProtoPayload}, rpc::{server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, storage_server::{logserver::LogServer, staging::{self, Staging}}, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService, StorageServiceConnector}, worker::{app::ClientHandlerTask, block_broadcaster::BlockBroadcaster}};
+use crate::{config::{AtomicConfig, Config}, consensus::{batch_proposal::TxWithAckChanTag, fork_receiver::ForkReceiver}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillNack, client::ProtoClientRequest, consensus::{ProtoAppendEntries, ProtoVote}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, storage_server::logserver::LogServer, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService, StorageServiceConnector}, worker::{app::ClientHandlerTask, block_broadcaster::BlockBroadcaster, block_sequencer::BlockSequencer}};
 
 mod cache_manager;
 mod block_broadcaster;
 mod block_sequencer;
+mod staging;
 pub mod app;
 
+
+use staging::Staging;
 
 pub struct PSLWorkerServerContext {
     config: AtomicConfig,
@@ -132,13 +135,14 @@ pub struct PSLWorker<E: ClientHandlerTask + Send + Sync + 'static> {
 
     cache_manager: Arc<Mutex<CacheManager>>,
     logserver: Arc<Mutex<LogServer>>,
-    fork_receiver: Arc<Mutex<ForkReceiver>>,
+    fork_receiver: Arc<Mutex<crate::storage_server::fork_receiver::ForkReceiver>>,
 
     block_broadcaster_to_storage: Arc<Mutex<BlockBroadcaster>>,
     block_broadcaster_to_other_workers: Arc<Mutex<BlockBroadcaster>>,
     staging: Arc<Mutex<Staging>>,
 
     app: Arc<Mutex<PSLAppEngine<E>>>,
+    __commit_rx_spawner: tokio::sync::broadcast::Receiver<u64>,
 }
 
 impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
@@ -172,7 +176,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         let (block_tx, block_rx) = make_channel(_chan_depth as usize);
         let (command_tx, command_rx) = make_channel(_chan_depth as usize);
         let (staging_tx, staging_rx) = make_channel(_chan_depth as usize);
-        
+
         let context = PinnedPSLWorkerServerContext::new(
             config.clone(), keystore.clone(),
             backfill_request_tx, fork_receiver_tx, client_request_tx.clone(), staging_tx
@@ -183,16 +187,54 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             keystore.clone(),
         ));
 
+        let (commit_tx_spawner, __commit_rx_spawner) = tokio::sync::broadcast::channel(_chan_depth as usize);
 
-        let cache_manager = Arc::new(Mutex::new(CacheManager::new(command_rx, block_rx)));
-        let logserver = Arc::new(Mutex::new(LogServer::new(config.clone(), keystore.clone(), )));
-        let fork_receiver = Arc::new(Mutex::new(ForkReceiver::new()));
-        let staging = Arc::new(Mutex::new(Staging::new()));
+        let app = Arc::new(Mutex::new(PSLAppEngine::<E>::new(
+            config.clone(),
+            cache_tx, client_command_rx, commit_tx_spawner
+        )));
 
-        let block_broadcaster_to_storage = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client, crypto, BroadcastMode::Star(config.consensus_config.node_list[0].clone()), true, block_rx, staging_tx)));
-        let block_broadcaster_to_other_workers = Arc::new(Mutex::new(BlockBroadcaster::new(config.clone(), client, crypto, BroadcastMode::Gossip(config.consensus_config.node_list.clone()), false, block_rx, staging_tx)));
+        let fork_receiver_client = Client::new_atomic(config.clone(), key_store.clone(), false, 0).into();
+        let fork_receiver = Arc::new(Mutex::new(crate::storage_server::fork_receiver::ForkReceiver::new(
+            config.clone(), keystore.clone(), ae_rx, crypto.get_connector(),
+            s/* todo: storage black hole */, block_tx, command_rx
+        )));
 
-        let app = Arc::new(Mutex::new(PSLAppEngine::<E>::new(config.clone(), )));
+        let cache_manager = Arc::new(Mutex::new(CacheManager::new(
+            cache_rx, block_rx, block_sequencer_tx
+        )));
+
+        let block_sequencer = Arc::new(Mutex::new(BlockSequencer::new(
+            config.clone(), crypto.get_connector(), block_sequencer_rx,
+            node_broadcaster_tx, storage_broadcaster_tx
+        )));
+
+        let bb_ts_client = Client::new_atomic(config.clone(), key_store.clone(), false, 0).into();
+        let block_broadcaster_to_storage = Arc::new(Mutex::new(BlockBroadcaster::new(
+            config.clone(), bb_ts_client, BroadcastMode::Star("storage".to_string()), true, false,
+            storage_broadcaster_rx, None, Some(staging_tx)
+        )));
+
+        let staging = Arc::new(Mutex::new(Staging::new(
+            config, crypto.get_connector(),
+            vote_rx, staging_rx, block_broadcaster_to_other_workers_deliver_tx,
+            logserver_tx, commit_tx_spawner
+        )));
+
+        let bb_ow_client = Client::new_atomic(config.clone(), key_store.clone(), false, 0).into();
+        let block_broadcaster_to_other_workers = Arc::new(Mutex::new(BlockBroadcaster::new(
+            config.clone(), bb_ow_client, BroadcastMode::Gossip(config.consensus_config.node_list.clone()), false, true,
+            node_broadcaster_rx, Some(block_broadcaster_to_other_workers_deliver_rx), None
+        )));
+
+
+        let remote_storage = StorageService::<RemoteStorageEngine>::new();
+
+        let logserver = Arc::new(Mutex::new(LogServer::new(
+            config.clone(), keystore.clone(), remote_storage.get_connector(crypto.get_connector()),
+            gc_rx, logserver_rx, query_rx
+        )));
+
         
         Self {
             config,
@@ -207,6 +249,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             block_broadcaster_to_other_workers,
             staging,
             app,
+
+            __commit_rx_spawner,
         }
     }
 

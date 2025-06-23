@@ -1,0 +1,151 @@
+use std::sync::Arc;
+
+use hashbrown::{HashMap, HashSet};
+use tokio::sync::Mutex;
+
+use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
+
+pub type VoteWithSender = (SenderType, ProtoVote);
+
+/// ```
+///                                                          ------------------------------------
+///                   Vote                      |--------->  |Block Broadcaster to Other Workers|
+///                    |-------------------|    |            ------------------------------------
+///                                        |    |
+///                                        v    |
+/// ------------------------------       ---------       -----------
+/// |Block Broadcaster to Storage| ----> |Staging| ----> |LogServer|
+/// ------------------------------       ---------       -----------
+///                                         |            ----------------------
+///                                         |----------> |Client Reply Handler|
+///                                                      ----------------------
+/// ```
+pub struct Staging {
+    config: AtomicConfig,
+    crypto: CryptoServiceConnector,
+
+    vote_rx: Receiver<VoteWithSender>,
+    block_rx: Receiver<CachedBlock>,
+
+    block_broadcaster_to_other_workers_tx: Sender<u64>,
+    logserver_tx: Sender<CachedBlock>,
+    client_reply_tx: Sender<u64>,
+
+    vote_buffer: HashMap<u64, Vec<VoteWithSender>>,
+    block_buffer: Vec<CachedBlock>,
+
+    commit_index: u64,
+
+}
+
+impl Staging {
+    pub fn new(config: AtomicConfig, crypto: CryptoServiceConnector, vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>, block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<CachedBlock>, client_reply_tx: Sender<u64>) -> Self {
+        Self {
+            config,
+            crypto,
+            vote_rx,
+            block_rx,
+            block_broadcaster_to_other_workers_tx,
+            logserver_tx,
+            client_reply_tx,
+
+            vote_buffer: HashMap::new(),
+            block_buffer: Vec::new(),
+
+            commit_index: 0,
+        }
+    }
+
+    pub async fn run(staging: Arc<Mutex<Self>>) {
+        let mut staging = staging.lock().await;
+        staging.worker().await;
+    }
+    async fn worker(&mut self) {
+        loop {
+            tokio::select! {
+                Some(vote) = self.vote_rx.recv() => {
+                    self.preprocess_and_buffer_vote(vote).await;
+                },
+                Some(block) = self.block_rx.recv() => {
+                    self.buffer_block(block).await;
+                },
+            }
+
+            let new_ci = self.try_commit_blocks();
+
+            if new_ci > self.commit_index {
+
+                // Ordering here is important.
+                // notify_downstream() needs to know the old commit index.
+                // clean_up_buffer only works if the commit index is updated.
+                self.notify_downstream(new_ci).await;
+                self.commit_index = new_ci;
+            }
+            self.clean_up_buffer();
+        }
+
+    }
+
+    async fn preprocess_and_buffer_vote(&mut self, vote: VoteWithSender) {
+        let (sender, vote) = vote;
+        self.vote_buffer
+            .entry(vote.n).or_insert(Vec::new())
+            .push((sender, vote));
+    }
+
+    async fn buffer_block(&mut self, block: CachedBlock) {
+        self.block_buffer.push(block);
+    }
+
+    fn get_commit_threshold(&self) -> usize {
+
+        // TODO: This is not correct. Change the config to reflect the quorum size.
+        let n = self.config.get().consensus_config.node_list.len() as usize;
+        n / 2 + 1
+    }
+
+    fn try_commit_blocks(&mut self) -> u64 {
+        let mut new_ci = self.commit_index;
+
+        for block in &self.block_buffer {
+            if block.block.n <= new_ci {
+                continue;
+            }
+
+            let __blank = vec![];
+
+            let votes = self.vote_buffer.get(&block.block.n).unwrap_or(&__blank);
+            let blk_hsh = &block.block_hash;
+            let vote_set = votes.iter()
+                .filter(|(_, vote)| blk_hsh.eq(&vote.fork_digest))
+                .map(|(sender, _)| sender.clone())
+                .collect::<HashSet<_>>();
+
+            if vote_set.len() >= self.get_commit_threshold() {
+                new_ci = block.block.n;
+            }
+        }
+
+        new_ci
+    }
+
+    fn clean_up_buffer(&mut self) {
+        self.vote_buffer.retain(|n, _| *n > self.commit_index);
+        self.block_buffer.retain(|block| block.block.n > self.commit_index);
+    }
+
+    async fn notify_downstream(&mut self, new_ci: u64) {
+        // Send all blocks > self.commit_index <= new_ci to the logserver.
+        for block in &self.block_buffer {
+            if block.block.n > self.commit_index && block.block.n <= new_ci {
+                self.logserver_tx.send(block.clone()).await;
+            }
+        }
+
+        // Send the new commit index to the block broadcaster.
+        self.block_broadcaster_to_other_workers_tx.send(new_ci).await;
+
+        // Send the commit index to the client reply handler.
+        self.client_reply_tx.send(new_ci).await;
+    }
+}
