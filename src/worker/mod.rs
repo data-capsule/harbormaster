@@ -242,7 +242,6 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         let (fork_receiver_tx, fork_receiver_rx) = make_channel(_chan_depth as usize);
         let (vote_tx, vote_rx) = make_channel(_chan_depth as usize);
         let (cache_tx, cache_rx) = make_channel(_chan_depth as usize);
-        let (client_command_tx, client_command_rx) = make_channel(_chan_depth as usize);
         let (block_tx, block_rx) = make_channel(_chan_depth as usize);
         let (command_tx, command_rx) = unbounded_channel();
         let (block_sequencer_tx, block_sequencer_rx) = make_channel(_chan_depth as usize);
@@ -276,12 +275,10 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         let app = Arc::new(Mutex::new(PSLAppEngine::<E>::new(
             config.clone(),
             cache_tx,
-            client_command_rx,
+            client_request_rx,
             commit_tx_spawner.clone(),
         )));
 
-        let fork_receiver_client =
-            Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
         let __black_hole_storage = StorageService::new(BlackHoleStorageEngine {}, _chan_depth);
         let fork_receiver = Arc::new(Mutex::new(
             crate::storage_server::fork_receiver::ForkReceiver::new(
@@ -299,6 +296,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             cache_rx,
             block_rx,
             block_sequencer_tx,
+            command_tx,
         )));
 
         let block_sequencer = Arc::new(Mutex::new(BlockSequencer::new(
@@ -329,6 +327,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             block_broadcaster_to_other_workers_deliver_tx,
             logserver_tx,
             commit_tx_spawner,
+            gc_tx,
         )));
 
         let bb_ow_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();

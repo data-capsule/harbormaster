@@ -35,11 +35,12 @@ pub struct Staging {
     block_buffer: Vec<CachedBlock>,
 
     commit_index: u64,
+    gc_tx: Sender<(SenderType, u64)>,
 
 }
 
 impl Staging {
-    pub fn new(config: AtomicPSLWorkerConfig, crypto: CryptoServiceConnector, vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>, block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>, client_reply_tx: tokio::sync::broadcast::Sender<u64>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, crypto: CryptoServiceConnector, vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>, block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>, client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>) -> Self {
         Self {
             config,
             crypto,
@@ -53,6 +54,7 @@ impl Staging {
             block_buffer: Vec::new(),
 
             commit_index: 0,
+            gc_tx,
         }
     }
 
@@ -140,14 +142,18 @@ impl Staging {
         let me = SenderType::Auth(me, 0);
         for block in &self.block_buffer {
             if block.block.n > self.commit_index && block.block.n <= new_ci {
-                self.logserver_tx.send((me.clone(), block.clone())).await;
+                let _ = self.logserver_tx.send((me.clone(), block.clone())).await;
             }
         }
 
+        if self.commit_index > 1000 {
+            let _ = self.gc_tx.send((me.clone(), self.commit_index - 1000)).await;
+        }
+
         // Send the new commit index to the block broadcaster.
-        self.block_broadcaster_to_other_workers_tx.send(new_ci).await;
+        let _ = self.block_broadcaster_to_other_workers_tx.send(new_ci).await;
 
         // Send the commit index to the client reply handler.
-        self.client_reply_tx.send(new_ci);
+        let _ = self.client_reply_tx.send(new_ci);
     }
 }

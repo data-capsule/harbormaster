@@ -4,8 +4,8 @@ use hashbrown::HashMap;
 use log::warn;
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
-use tokio::sync::{oneshot, Mutex};
-use crate::{crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, utils::channel::{Receiver, Sender}, worker::block_sequencer::BlockSeqNumQuery};
+use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
+use crate::{crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::channel::{Receiver, Sender}, worker::block_sequencer::BlockSeqNumQuery};
 use crate::worker::block_sequencer::SequencerCommand;
 
 #[derive(Error, Debug)]
@@ -177,6 +177,7 @@ pub struct CacheManager {
     command_rx: Receiver<CacheCommand>,
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
     block_sequencer_tx: Sender<SequencerCommand>,
+    fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     cache: HashMap<CacheKey, CachedValue>,
 
     last_committed_seq_num: u64,
@@ -187,11 +188,13 @@ impl CacheManager {
         command_rx: Receiver<CacheCommand>,
         block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
         block_sequencer_tx: Sender<SequencerCommand>,
+        fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     ) -> Self {
         Self {
             command_rx,
             block_rx,
             block_sequencer_tx,
+            fork_receiver_cmd_tx,
             cache: HashMap::new(),
             last_committed_seq_num: 0,
         }
@@ -305,7 +308,7 @@ impl CacheManager {
                 let should_propagate = false;
 
                 if should_propagate {
-                    self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp {
+                    let _ = self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp {
                         key: key.clone(),
                         value: cached_value,
                     }).await;
@@ -315,14 +318,17 @@ impl CacheManager {
 
         // Advance the vector clock in the sequencer.
         let block_seq_num = block.block.n;
-        self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
-            sender,
+        let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
+            sender: sender.clone(),
             block_seq_num,
         }).await;
 
 
         // A new block can be formed now.
-        self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+        let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+
+        // Confirm the block to the fork receiver.
+        let _ = self.fork_receiver_cmd_tx.send(ForkReceiverCommand::Confirm(sender, block_seq_num));
 
     }
 }
