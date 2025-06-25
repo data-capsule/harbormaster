@@ -24,6 +24,7 @@ pub enum CacheCommand {
     Put(
         CacheKey /* Key */,
         Vec<u8> /* Value */,
+        BigInt /* Val Hash */,
         BlockSeqNumQuery,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
@@ -81,9 +82,10 @@ impl CacheConnector {
         &self,
         key: Vec<u8>,
         value: Vec<u8>,
+        val_hash: BigInt,
         seq_num_query: BlockSeqNumQuery,
     ) -> anyhow::Result<()> {
-        dispatch!(self, CacheCommand::Put, key, value, seq_num_query);
+        dispatch!(self, CacheCommand::Put, key, value, val_hash, seq_num_query);
         Ok(())
     }
 
@@ -100,13 +102,11 @@ pub struct CachedValue {
 impl CachedValue {
 
     /// Completely new value, with seq_num = 1
-    pub fn new(value: Vec<u8>) -> Self {
-        Self::new_with_seq_num(value, 1)
+    pub fn new(value: Vec<u8>, val_hash: BigInt) -> Self {
+        Self::new_with_seq_num(value, 1, val_hash)
     }
 
-    pub fn new_with_seq_num(value: Vec<u8>, seq_num: u64) -> Self {
-        let val_hash = hash(&value);
-        let val_hash = BigInt::from_bytes_be(Sign::Plus, &val_hash);
+    pub fn new_with_seq_num(value: Vec<u8>, seq_num: u64, val_hash: BigInt) -> Self {
         Self {
             value,
             seq_num,
@@ -115,10 +115,10 @@ impl CachedValue {
     }
 
     /// Blindly update value, incrementing seq_num
-    pub fn blind_update(&mut self, new_value: Vec<u8>) -> u64 {
+    pub fn blind_update(&mut self, new_value: Vec<u8>, new_val_hash: BigInt) -> u64 {
         self.value = new_value;
         self.seq_num += 1;
-        self.val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&self.value));
+        self.val_hash = new_val_hash;
 
         self.seq_num
     }
@@ -278,19 +278,19 @@ impl CacheManager {
 
                 // TODO: Fill from checkpoint if key not found.
             }
-            CacheCommand::Put(key, value, seq_num_query, response_tx) => {
+            CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
                 if self.cache.contains_key(&key) {
-                    let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone());
+                    let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
                     response_tx.send(Ok(seq_num)).unwrap();
                     
-                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num), seq_num_query }).await;
+                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
                     return;
                 }
 
-                let cached_value = CachedValue::new(value.clone());
+                let cached_value = CachedValue::new(value.clone(), val_hash.clone());
                 self.cache.insert(key.clone(), cached_value);
                 response_tx.send(Ok(1)).unwrap();
-                self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value), seq_num_query }).await;
+                self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
 
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {

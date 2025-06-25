@@ -238,6 +238,10 @@ impl BlockSequencer {
         self.storage_broadcaster_tx.send(self_writes_rx).await;
 
         // TODO: Send hash_rx2 to client reply handler.
+
+        let me = self.config.get().net_config.name.clone();
+        let me = SenderType::Auth(me, 0);
+        self.curr_vector_clock.advance(me, seq_num);
     }
 
     fn wrap_vec(
