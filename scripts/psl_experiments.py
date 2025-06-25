@@ -1,5 +1,5 @@
 import os
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from experiments import Experiment
 from deployment import Deployment
 from collections import defaultdict
@@ -132,6 +132,33 @@ sleep 60
             sequencer_vms = deployment.get_wan_setup(self.sequencer_distribution)
         
         return node_vms, storage_vms, sequencer_vms
+    
+
+    def generate_multicast_tree(self, worker_names: List[str], fanout: int) -> Dict[str, List[str]]:
+        """
+        Generate a multicast tree for the given worker names with a given fanout.
+        Returns the gossip_downstream_worker_list for each worker.
+        """
+
+        ret = {}
+        i = 0
+
+        # Assume that the list is the flattened complete tree.
+        # The children of index i are i * fanout + 1, i * fanout + 2, ..., i * fanout + fanout.
+        # The parent of index i is (i - 1) // fanout.
+        # Each worker sends to its children and its parent.
+
+        while i < len(worker_names):
+            curr = worker_names[i]
+            children = [worker_names[i * fanout + j] for j in range(1, fanout + 1) if i * fanout + j < len(worker_names)]
+            parent = (i - 1) // fanout
+            ret[curr] = children[:]
+            if parent >= 0:
+                ret[curr].append(worker_names[parent])
+            i += 1
+
+        return ret
+
 
     def generate_configs(self, deployment: Deployment, config_dir, log_dir):
         # If config_dir is not empty, assume the configs have already been generated
@@ -264,6 +291,10 @@ sleep 60
         print("Storage names", storage_names)
         print("Sequencer names", sequencer_names)
 
+        gossip_downstream_worker_list = self.generate_multicast_tree(worker_names, 2)
+
+        print("Gossip downstream worker list", gossip_downstream_worker_list)
+
         for k, v in node_configs.items():
             tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
             allowed_keylist_path, signing_priv_key_path = crypto_info[k]
@@ -275,6 +306,11 @@ sleep 60
             else:
                 v["consensus_config"]["node_list"] = nodelist[:]
 
+            if k in worker_names:
+                v["worker_config"]["gossip_downstream_worker_list"] = gossip_downstream_worker_list[k]
+            else:
+                v["worker_config"]["gossip_downstream_worker_list"] = []
+
             v["consensus_config"]["learner_list"] = []
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path
@@ -284,7 +320,6 @@ sleep 60
             v["worker_config"]["all_worker_list"] = worker_names[:]
             v["worker_config"]["storage_list"] = storage_names[:] 
             v["worker_config"]["sequencer_list"] = sequencer_names[:]
-            v["worker_config"]["gossip_downstream_worker_list"] = worker_names[:] # TODO: Hardcode the multicast tree.
 
             # Only simulate Byzantine behavior in node1.
             if "evil_config" in v and v["evil_config"]["simulate_byzantine_behavior"] and k != "node1":

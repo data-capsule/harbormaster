@@ -17,13 +17,6 @@ tee_type = "nontee"
 region_id = 0
 tag = "worker"
 
-[deployment_config.node_list.nodepool_vm1]
-private_ip = "127.0.0.1"
-public_ip = "127.0.0.1"
-tee_type = "nontee"
-region_id = 0
-tag = "worker"
-
 [deployment_config.node_list.nodepool_vm2]
 private_ip = "127.0.0.1"
 public_ip = "127.0.0.1"
@@ -110,7 +103,7 @@ payload_size = 1_048_576 # 1 MiB
 name = "storage_sig_1"
 type = "psl_storage"
 repeats = 1
-num_nodes = 2
+num_nodes = 8
 num_storage_nodes = 1
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
