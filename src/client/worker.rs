@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use nix::libc::stat;
 use prost::Message as _;
 use sha2::{Digest, Sha512};
@@ -489,6 +489,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                 },
                 Executor::Any => {
                     let recv_node = &node_list[(*curr_round_robin_id) % node_list.len()];
+                    warn!("Sending request to {}", recv_node);
                     // *curr_round_robin_id = *curr_round_robin_id + 1;
                     req.last_sent_to = recv_node.clone();
                     PinnedClient::send(

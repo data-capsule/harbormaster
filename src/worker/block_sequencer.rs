@@ -1,9 +1,10 @@
 use std::{ops::{Deref, DerefMut}, sync::Arc};
 
 use hashbrown::HashMap;
+use log::warn;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::{consensus::ProtoBlock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}}, rpc::SenderType, utils::channel::{Receiver, Sender}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{default_hash, CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::{consensus::ProtoBlock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}}, rpc::SenderType, utils::channel::{Receiver, Sender}};
 
 use super::cache_manager::{CacheKey, CachedValue};
 
@@ -36,6 +37,11 @@ pub enum SequencerCommand {
     /// Helps maintain atomicity.
     /// (Doesn't mean it is forced to form a block, just that it can)
     MakeNewBlock,
+
+
+    /// Force a new block to be formed.
+    /// Only if there is at least one write in the bag.
+    ForceMakeNewBlock,
 }
 
 
@@ -98,7 +104,7 @@ impl BlockSequencer {
         Self {
             config, crypto,
             curr_block_seq_num: 1,
-            last_block_hash: FutureHash::Immediate(HashType::default()),
+            last_block_hash: FutureHash::Immediate(default_hash()),
             self_write_op_bag: Vec::new(),
             all_write_op_bag: Vec::new(),
             curr_vector_clock: VectorClock::new(),
@@ -136,13 +142,15 @@ impl BlockSequencer {
                 SequencerCommand::MakeNewBlock => {
                     self.maybe_prepare_new_block().await;
                 },
+                SequencerCommand::ForceMakeNewBlock => {
+                    self.force_prepare_new_block().await;
+                }
             }
         }
     }
 
     async fn maybe_prepare_new_block(&mut self) {
         let config = self.config.get();
-        // TODO: Make the config proper.
         let all_write_batch_size = config.worker_config.all_writes_max_batch_size;
         let self_write_batch_size = config.worker_config.self_writes_max_batch_size;
 
@@ -150,6 +158,19 @@ impl BlockSequencer {
             return; // Not enough writes to form a block
         }
 
+        self.do_prepare_new_block().await;
+    }
+
+    async fn force_prepare_new_block(&mut self) {
+        if self.all_write_op_bag.is_empty() {
+            return;
+        }
+        
+        self.do_prepare_new_block().await;
+    }
+
+    async fn do_prepare_new_block(&mut self) {
+        warn!("Preparing new block");
         let seq_num = self.curr_block_seq_num;
         self.curr_block_seq_num += 1;
 
@@ -167,7 +188,7 @@ impl BlockSequencer {
         let (all_writes_rx, _, _) = self.crypto.prepare_block(
             all_writes,
             false,
-            FutureHash::Immediate(HashType::default())
+            FutureHash::Immediate(default_hash())
         ).await;
 
         let parent_hash_rx = self.last_block_hash.take();

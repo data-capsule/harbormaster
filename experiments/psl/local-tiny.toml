@@ -91,21 +91,25 @@ client_max_retry = 10
 
 [client_config.workload_config]
 max_concurrent_requests = 1
-rate = 100.0 # 100 requests per second input rate.
 
-
-[client_config.workload_config.request_config.Blanks]
-payload_size = 1_048_576 # 1 MiB
-
+[client_config.workload_config.request_config.KVReadWriteYCSB]
+num_keys = 300000
+num_fields = 1
+val_size = 100
+linearizable_reads = false
+byz_commit_ratio = 0.0
+load_phase = true
+zipf_exponent = 0.99
+read_ratio = 0.5
 
 
 [[experiments]]
 name = "storage_sig_1"
 type = "psl_storage"
 repeats = 1
-num_nodes = 8
+num_nodes = 2
 num_storage_nodes = 1
-num_sequencer_nodes = 1
+num_sequencer_nodes = 0
 node_distribution = "tag:worker"
 storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
@@ -113,11 +117,8 @@ build_command = "make"
 duration = 60
 data_dir = "./"
 
-[experiments.client_config.workload_config.request_config.AEBlanks]
-signature_interval = 1
-
 [experiments.sweeping_parameters]
-num_clients = [1]
+num_clients = [2]
 
 [[results]]
 name = "throughput_client_sweep"

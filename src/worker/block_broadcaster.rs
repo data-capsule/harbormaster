@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use log::warn;
 use prost::Message;
 use tokio::{sync::Mutex, sync::oneshot};
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::CachedBlock, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
@@ -135,6 +136,8 @@ impl BlockBroadcaster {
 
                 let sz = data.len();
                 let data = PinnedMessage::from(data, sz, SenderType::Anon);
+
+                warn!("Broadcasting block {} to {:?}", block.block.n, peers);
 
                 let _ = PinnedClient::broadcast(
                     &self.client,

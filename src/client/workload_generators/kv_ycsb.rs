@@ -156,15 +156,15 @@ impl KVReadWriteYCSBGenerator {
 
         WorkloadUnit {
             tx: ProtoTransaction {
-                on_receive: None,
-                on_crash_commit: Some(ProtoTransactionPhase {
+                on_crash_commit: None,
+                on_receive: Some(ProtoTransactionPhase {
                     ops,
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader,
+            executor: Executor::Any, // For PSL, any node should be able to handle the request
             wrapper_mode: WrapperMode::ClientRequest,
             rate_control: RateControl::CloseLoop,
         }
@@ -255,43 +255,58 @@ impl KVReadWriteYCSBGenerator {
         }
     }
 
+    fn update_receive_next(&mut self) -> ProtoTransaction {
+        let ops = self.update_next();
+        ProtoTransaction {
+            on_receive: Some(ops),
+            on_crash_commit: None,
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        }
+    }
+
     fn run_phase_next(&mut self) -> WorkloadUnit {
         let next_op = self.read_write_weights[self.read_write_dist.sample(&mut self.rng)].0.clone();
 
         let tx = match next_op {
             TxOpType::Read => {
                 self.last_request_type = TxOpType::Read;
-                if self.config.linearizable_reads {
-                    let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
-                    match crash_or_byz {
-                        TxPhaseType::Crash => self.read_crash_next(),
-                        TxPhaseType::Byz => self.read_byz_next(),
-                    }
-                } else {
-                    self.read_unlogged_next()
-                }
+                // if self.config.linearizable_reads {
+                //     let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
+                //     match crash_or_byz {
+                //         TxPhaseType::Crash => self.read_crash_next(),
+                //         TxPhaseType::Byz => self.read_byz_next(),
+                //     }
+                // } else {
+                //     self.read_unlogged_next()
+                // }
+                self.read_unlogged_next()
 
             },
             TxOpType::Update => {
                 self.last_request_type = TxOpType::Update;
-                let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
-                    match crash_or_byz {
-                        TxPhaseType::Crash => self.update_crash_next(),
-                        TxPhaseType::Byz => self.update_byz_next(),
-                    }
+                // let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
+                //     match crash_or_byz {
+                //         TxPhaseType::Crash => self.update_crash_next(),
+                //         TxPhaseType::Byz => self.update_byz_next(),
+                //     }
+                self.update_receive_next()
             },
         };
 
-        let executor = match next_op {
-            TxOpType::Read => {
-                if self.config.linearizable_reads {
-                    Executor::Leader
-                } else {
-                    Executor::Any
-                }
-            },
-            TxOpType::Update => Executor::Leader,
-        };
+        // let executor = match next_op {
+        //     TxOpType::Read => {
+        //         if self.config.linearizable_reads {
+        //             Executor::Leader
+        //         } else {
+        //             Executor::Any
+        //         }
+        //     },
+        //     TxOpType::Update => Executor::Leader,
+        // };
+
+        let executor = Executor::Any; // For PSL, any node should be able to handle the request
 
         WorkloadUnit {
             tx, executor,

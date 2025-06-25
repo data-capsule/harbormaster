@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use hashbrown::HashMap;
 use log::warn;
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
-use crate::{crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::channel::{Receiver, Sender}, worker::block_sequencer::BlockSeqNumQuery};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::BlockSeqNumQuery};
 use crate::worker::block_sequencer::SequencerCommand;
 
 #[derive(Error, Debug)]
@@ -32,7 +32,8 @@ pub enum CacheCommand {
         Vec<u8> /* Value */,
         u64 /* Expected SeqNum */,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
-    )
+    ),
+    Commit
 }
 
 
@@ -174,6 +175,7 @@ impl CachedValue {
 pub type CacheKey = Vec<u8>;
 
 pub struct CacheManager {
+    config: AtomicPSLWorkerConfig,
     command_rx: Receiver<CacheCommand>,
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
     block_sequencer_tx: Sender<SequencerCommand>,
@@ -181,27 +183,36 @@ pub struct CacheManager {
     cache: HashMap<CacheKey, CachedValue>,
 
     last_committed_seq_num: u64,
+    batch_timer: Arc<Pin<Box<ResettableTimer>>>,
+    last_batch_time: Instant,
 }
 
 impl CacheManager {
     pub fn new(
+        config: AtomicPSLWorkerConfig,
         command_rx: Receiver<CacheCommand>,
         block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
         block_sequencer_tx: Sender<SequencerCommand>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     ) -> Self {
+        let batch_timer = ResettableTimer::new(Duration::from_millis(config.get().worker_config.batch_max_delay_ms));
         Self {
+            config,
             command_rx,
             block_rx,
             block_sequencer_tx,
             fork_receiver_cmd_tx,
             cache: HashMap::new(),
             last_committed_seq_num: 0,
+            batch_timer,
+            last_batch_time: Instant::now(),
         }
     }
 
     pub async fn run(cache_manager: Arc<Mutex<CacheManager>>) {
         let mut cache_manager = cache_manager.lock().await;
+
+        cache_manager.batch_timer.run().await;
         
         
         while let Ok(_) = cache_manager.worker().await {
@@ -221,6 +232,15 @@ impl CacheManager {
                     self.handle_block(sender, block).await;
                 } else {
                     warn!("Failed to get block from block_rx");
+                }
+            }
+            _ = self.batch_timer.wait() => {
+
+                // This is safe to do here.
+                // The tick won't interrupt handle_command or handle_block's logic.
+                if self.last_batch_time.elapsed() > Duration::from_millis(self.config.get().worker_config.batch_max_delay_ms) {
+                    self.last_batch_time = Instant::now();
+                    self.block_sequencer_tx.send(SequencerCommand::ForceMakeNewBlock).await;
                 }
             }
         }
@@ -253,7 +273,11 @@ impl CacheManager {
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();
             }
-
+            CacheCommand::Commit => {
+                warn!("Cache State: {:?}", self.cache);
+                self.last_batch_time = Instant::now();
+                self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+            }
         }
     }
 
@@ -325,6 +349,7 @@ impl CacheManager {
 
 
         // A new block can be formed now.
+        self.last_batch_time = Instant::now();
         let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
 
         // Confirm the block to the fork receiver.

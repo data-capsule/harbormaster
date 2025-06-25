@@ -336,7 +336,10 @@ sleep 60
             config = deepcopy(self.base_client_config)
             client = "client" + str(client_num + 1)
             config["net_config"]["name"] = client
-            config["net_config"]["nodes"] = deepcopy(nodes)
+
+            client_nodes = deepcopy(nodes)
+            client_nodes = {k: v for k, v in client_nodes.items() if k in worker_names}
+            config["net_config"]["nodes"] = client_nodes
 
             tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
             allowed_keylist_path, signing_priv_key_path = crypto_info[client]
