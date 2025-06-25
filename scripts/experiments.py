@@ -39,6 +39,8 @@ class Experiment:
     project_home: str
     controller_must_run: bool
 
+    data_dir: str
+
 
     def done(self):
         try:
@@ -151,8 +153,9 @@ class Experiment:
             config = deepcopy(self.base_node_config)
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
-            # config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
-            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/data/{name}-db"
+
+            data_dir = os.path.join(self.data_dir, f"{name}-db")
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
 
 
             node_configs[name] = config

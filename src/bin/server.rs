@@ -166,7 +166,7 @@ fn main() {
             (_cfg.consensus_config.node_list.clone(), _cfg.net_config.name.clone())
         },
         RunMode::Worker(_cfg) => {
-            (_cfg.worker_config.storage_list.clone(), _cfg.net_config.name.clone())
+            (_cfg.worker_config.all_worker_list.clone(), _cfg.net_config.name.clone())
         },
     };
 

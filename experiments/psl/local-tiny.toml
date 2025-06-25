@@ -55,7 +55,7 @@ channel_depth = 1000
 [node_config.consensus_config]
 commit_index_gap_soft = 250
 commit_index_gap_hard = 5000
-liveness_u = 2
+liveness_u = 0
 max_backlog_batch_size = 1000
 signature_max_delay_blocks = 10
 signature_max_delay_ms = 10000
@@ -112,11 +112,13 @@ type = "psl_storage"
 repeats = 1
 num_nodes = 2
 num_storage_nodes = 1
+num_sequencer_nodes = 1
 node_distribution = "tag:worker"
 storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
 duration = 60
+data_dir = "./"
 
 [experiments.client_config.workload_config.request_config.AEBlanks]
 signature_interval = 1

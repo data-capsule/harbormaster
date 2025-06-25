@@ -24,3 +24,5 @@ __pycache__
 **/deployment_artifacts/
 
 latencies.txt
+
+*-db/

@@ -167,6 +167,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
                     int(_e.get("num_storage_nodes", 0)),
+                    int(_e.get("num_sequencer_nodes", 0)),
                     int(_e["num_clients"]),
                     _node_config,
                     _client_config,
@@ -177,7 +178,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     _e.get("build_command", "make"),
                     git_hash_override,
                     project_home,
-                    controller_must_run
+                    controller_must_run,
+                    _e.get("data_dir", "/data")
                 ))
         else:
             seq_start = int(e.get("seq_start", 0))
@@ -189,6 +191,7 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 int(e["duration"]),
                 int(e["num_nodes"]),
                 int(e.get("num_storage_nodes", 0)),
+                int(e.get("num_sequencer_nodes", 0)),
                 int(e["num_clients"]),
                 node_config,
                 client_config,
@@ -197,7 +200,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 e.get("build_command", "make"),
                 git_hash_override,
                 project_home,
-                controller_must_run
+                controller_must_run,
+                e.get("data_dir", "/data")
             ))
 
     results = []

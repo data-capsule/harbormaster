@@ -1,4 +1,5 @@
 import os
+from typing import List, Tuple
 from experiments import Experiment
 from deployment import Deployment
 from collections import defaultdict
@@ -90,6 +91,48 @@ sleep 60
                 f.write(_script + "\n\n")
 
 
+    def get_vms(self, deployment: Deployment) -> Tuple[List, List, List]:
+        if self.node_distribution == "uniform":
+            node_vms = deployment.get_all_node_vms()
+        elif self.node_distribution == "sev_only":
+            node_vms = deployment.get_nodes_with_tee("sev")
+        elif self.node_distribution == "tdx_only":
+            node_vms = deployment.get_nodes_with_tee("tdx")
+        elif self.node_distribution == "nontee_only":
+            node_vms = deployment.get_nodes_with_tee("nontee")
+        elif self.node_distribution.startswith("tag:"):
+            node_vms = deployment.get_nodes_with_tag(self.node_distribution.split(":")[1])
+        else:
+            node_vms = deployment.get_wan_setup(self.node_distribution)
+        
+        if self.storage_distribution == "uniform":
+            storage_vms = deployment.get_all_node_vms()
+        elif self.storage_distribution == "sev_only":
+            storage_vms = deployment.get_nodes_with_tee("sev")
+        elif self.storage_distribution == "tdx_only":
+            storage_vms = deployment.get_nodes_with_tee("tdx")
+        elif self.storage_distribution == "nontee_only":
+            storage_vms = deployment.get_nodes_with_tee("nontee")
+        elif self.storage_distribution.startswith("tag:"):
+            storage_vms = deployment.get_nodes_with_tag(self.storage_distribution.split(":")[1])
+        else:
+            storage_vms = deployment.get_wan_setup(self.storage_distribution)
+        
+        if self.sequencer_distribution == "uniform":
+            sequencer_vms = deployment.get_all_node_vms()
+        elif self.sequencer_distribution == "sev_only":
+            sequencer_vms = deployment.get_nodes_with_tee("sev")
+        elif self.sequencer_distribution == "tdx_only":
+            sequencer_vms = deployment.get_nodes_with_tee("tdx")
+        elif self.sequencer_distribution == "nontee_only":
+            sequencer_vms = deployment.get_nodes_with_tee("nontee")
+        elif self.sequencer_distribution.startswith("tag:"):
+            sequencer_vms = deployment.get_nodes_with_tag(self.sequencer_distribution.split(":")[1])
+        else:
+            sequencer_vms = deployment.get_wan_setup(self.sequencer_distribution)
+        
+        return node_vms, storage_vms, sequencer_vms
+
     def generate_configs(self, deployment: Deployment, config_dir, log_dir):
         # If config_dir is not empty, assume the configs have already been generated
         if len(os.listdir(config_dir)) > 0:
@@ -104,33 +147,24 @@ sleep 60
         nodelist = []
         nodes = {}
         node_configs = {}
-        vms = []
         node_list_for_crypto = {}
         self.binary_mapping = defaultdict(list)
 
         # TODO: Do this separately for node, storage, and sequencer.
 
-        if self.node_distribution == "uniform":
-            vms = deployment.get_all_node_vms()
-        elif self.node_distribution == "sev_only":
-            vms = deployment.get_nodes_with_tee("sev")
-        elif self.node_distribution == "tdx_only":
-            vms = deployment.get_nodes_with_tee("tdx")
-        elif self.node_distribution == "nontee_only":
-            vms = deployment.get_nodes_with_tee("nontee")
-        elif self.node_distribution.startswith("tag:"):
-            vms = deployment.get_nodes_with_tag(self.node_distribution.split(":")[1])
-        else:
-            vms = deployment.get_wan_setup(self.node_distribution)
-        
+        (node_vms, storage_vms, sequencer_vms) = self.get_vms(deployment)
+        worker_names = []
+        storage_names = []
+        sequencer_names = []
+        port = deployment.node_port_base
 
         for node_num in range(1, self.num_nodes+1):
-            port = deployment.node_port_base + node_num
+            port += 1
             listen_addr = f"0.0.0.0:{port}"
             name = f"node{node_num}"
             domain = f"{name}.pft.org"
 
-            _vm = vms[rr_cnt % len(vms)]
+            _vm = node_vms[rr_cnt % len(node_vms)]
             self.binary_mapping[_vm].append(name)
             
             private_ip = _vm.private_ip
@@ -143,16 +177,80 @@ sleep 60
                 "domain": domain
             }
 
+            worker_names.append(name)
+
             node_list_for_crypto[name] = (connect_addr, domain)
 
             config = deepcopy(self.base_node_config)
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
-            # config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
-            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/data/{name}-db"
-
+            data_dir = os.path.join(self.data_dir, f"{name}-db")
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
 
             node_configs[name] = config
+
+        for node_num in range(1, self.num_storage_nodes+1):
+            port += 1
+            listen_addr = f"0.0.0.0:{port}"
+            name = f"storage{node_num}"
+            domain = f"{name}.pft.org"
+
+            _vm = storage_vms[rr_cnt % len(storage_vms)]
+            self.binary_mapping[_vm].append(name)
+
+            storage_names.append(name)
+            
+            private_ip = _vm.private_ip
+            rr_cnt += 1
+            connect_addr = f"{private_ip}:{port}"
+            
+            nodelist.append(name[:])
+            nodes[name] = {
+                "addr": connect_addr,
+                "domain": domain
+            }
+
+            node_list_for_crypto[name] = (connect_addr, domain)
+
+            config = deepcopy(self.base_node_config)
+            config["net_config"]["name"] = name
+            config["net_config"]["addr"] = listen_addr
+            data_dir = os.path.join(self.data_dir, f"{name}-db")
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
+
+            node_configs[name] = config
+
+        for node_num in range(1, self.num_sequencer_nodes+1):
+            port += 1
+            listen_addr = f"0.0.0.0:{port}"
+            name = f"sequencer{node_num}"
+            domain = f"{name}.pft.org"
+            
+            _vm = sequencer_vms[rr_cnt % len(sequencer_vms)]
+            self.binary_mapping[_vm].append(name)
+            
+            private_ip = _vm.private_ip
+            rr_cnt += 1
+            connect_addr = f"{private_ip}:{port}"
+            
+            nodelist.append(name[:])
+            nodes[name] = {
+                "addr": connect_addr,
+                "domain": domain
+            }
+            sequencer_names.append(name)
+
+            node_list_for_crypto[name] = (connect_addr, domain)
+
+            config = deepcopy(self.base_node_config)
+            config["net_config"]["name"] = name
+            config["net_config"]["addr"] = listen_addr
+            data_dir = os.path.join(self.data_dir, f"{name}-db")
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
+
+            node_configs[name] = config
+
+            
 
         if self.client_region == -1:
             client_vms = deployment.get_all_client_vms()
@@ -162,18 +260,31 @@ sleep 60
         crypto_info = self.gen_crypto(config_dir, node_list_for_crypto, len(client_vms))
         
 
+        print("Worker names", worker_names)
+        print("Storage names", storage_names)
+        print("Sequencer names", sequencer_names)
+
         for k, v in node_configs.items():
             tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
             allowed_keylist_path, signing_priv_key_path = crypto_info[k]
 
             v["net_config"]["nodes"] = deepcopy(nodes)
-            v["consensus_config"]["node_list"] = nodelist[:]
+
+            if k in sequencer_names:
+                v["consensus_config"]["node_list"] = sequencer_names[:]
+            else:
+                v["consensus_config"]["node_list"] = nodelist[:]
+
             v["consensus_config"]["learner_list"] = []
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path
             v["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
             v["rpc_config"]["allowed_keylist_path"] = allowed_keylist_path
             v["rpc_config"]["signing_priv_key_path"] = signing_priv_key_path
+            v["worker_config"]["all_worker_list"] = worker_names[:]
+            v["worker_config"]["storage_list"] = storage_names[:] 
+            v["worker_config"]["sequencer_list"] = sequencer_names[:]
+            v["worker_config"]["gossip_downstream_worker_list"] = worker_names[:] # TODO: Hardcode the multicast tree.
 
             # Only simulate Byzantine behavior in node1.
             if "evil_config" in v and v["evil_config"]["simulate_byzantine_behavior"] and k != "node1":
