@@ -172,8 +172,6 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                             if res.is_err() {
                                 // We need to try again.
                                 let _ = backpressure_tx.send(CheckerResponse::TryAgain(req, None, None)).await;
-                                let err = res.err();
-                                error!("Trying again because {:?}", err);
                                 continue;
                             }
                             let msg = res.unwrap();
@@ -350,12 +348,17 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut ae_parent_hash = default_hash();
 
         let experiment_global_start = Instant::now();
-        while experiment_global_start.elapsed() < duration {
+        while experiment_global_start.elapsed() < duration || outstanding_requests.len() > 0 {
             // Wait for the checker task to give a go-ahead.
             match backpressure_rx.recv().await {
                 Some(CheckerResponse::Success(id)) => {
                     // Remove the request from the outstanding requests if possible.
                     outstanding_requests.remove(&id);
+
+                    if experiment_global_start.elapsed() >= duration {
+                        continue;
+                    }
+
                     // We can send a new request.
                     let payload = self.generator.next();
                     let mut req = OutstandingRequest::default();
@@ -475,6 +478,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
     async fn send_request(&self, req: &mut OutstandingRequest, node_list: &Vec<String>, curr_leader_id: &mut usize, curr_round_robin_id: &mut usize, outstanding_requests: &mut HashMap<u64, OutstandingRequest>) {
         let buf = &req.payload;
         let sz = buf.len();
+
 
         let __executor_mode = req.executor_mode.clone();
         loop {

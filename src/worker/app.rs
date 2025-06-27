@@ -256,6 +256,9 @@ impl ClientHandlerTask for KVSTask {
     async fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &Sender<UncommittedResultSet>) -> anyhow::Result<()> {
         let req = &request.0;
         let resp = &request.1;
+        self.total_work += 1;
+        
+        
         if req.is_none() {
             return self.reply_invalid(resp, reply_handler_tx).await;
         }
@@ -273,7 +276,6 @@ impl ClientHandlerTask for KVSTask {
 
 
         if let std::result::Result::Ok((results, seq_num)) = self.execute_ops(on_receive.ops.as_ref()).await {
-            self.total_work += 1;
             return self.reply_receipt(resp, results, seq_num, reply_handler_tx).await;
         }
 
