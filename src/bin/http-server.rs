@@ -121,6 +121,81 @@ struct SharedState {
     tag_counter: AtomicU64,
 }
 
+async fn send_response(result: &ProtoClientReply, is_write: bool) -> impl Responder {
+    if result.reply.is_none() {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "message": "Bug in the server"
+        }));
+    }
+
+    // Result map:
+    // Receipt -> 200, { "value": "base64_encoded_value", "timestamp": lamport_timestamp } | 404
+    // TryAgain -> 500, { "message": "try again" }
+    // Anything else -> 500, { "message": "Bug in the server" }
+
+    match &result.reply.as_ref().unwrap() {
+        psl::proto::client::proto_client_reply::Reply::Receipt(proto_transaction_receipt) => {
+            let result = &proto_transaction_receipt.results.as_ref().unwrap().result;
+            if result.is_empty() {
+                return HttpResponse::NotFound().json(serde_json::json!({
+                    "message": "Bug in the server"
+                }));
+            }
+
+            if !result[0].success {
+                if is_write {
+                    return HttpResponse::NotFound().json(serde_json::json!({
+                        "message": "Write failed"
+                    }));
+                } else {
+                    return HttpResponse::NotFound().json(serde_json::json!({
+                        "message": "Key not found"
+                    }));
+                }
+            }
+
+            let values = &result[0].values;
+
+            if is_write {
+                HttpResponse::Accepted().json(serde_json::json!({
+                    "message": "Write accepted"
+                }))
+            } else {
+                if values.len() != 2 {
+                    return HttpResponse::InternalServerError().json(serde_json::json!({
+                        "message": "Bug in the server"
+                    }));
+                }
+                let value = &values[0];
+                let timestamp = &values[1].clone().try_into();
+                match timestamp {
+                    Ok(timestamp) => {
+                        HttpResponse::Ok().json(serde_json::json!({
+                            "value": general_purpose::STANDARD.encode(value),
+                            "timestamp": u64::from_be_bytes(*timestamp),
+                        }))
+                    },
+                    Err(_) => {
+                        return HttpResponse::InternalServerError().json(serde_json::json!({
+                            "message": "Bug in the server"
+                        }));
+                    }
+                }
+            }
+        },
+        psl::proto::client::proto_client_reply::Reply::TryAgain(proto_try_again) => {
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "message": "try again"
+            }))
+        },
+        _ => {
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "message": "Bug in the server"
+            }))
+        }
+    }
+}
+
 #[get("/")]
 async fn http_get(data: web::Data<SharedState>, key: web::Json<Key>) -> impl Responder {
     let key = match key.encoding {
@@ -152,9 +227,7 @@ async fn http_get(data: web::Data<SharedState>, key: web::Json<Key>) -> impl Res
     let result = result.0.as_ref();
 
     let result = ProtoClientReply::decode(&result.0.as_slice()[0..result.1]).unwrap();
-
-    
-    HttpResponse::Ok().json(serde_json::json!(result))
+    send_response(&result, false).await
 }
 
 #[post("/")]
@@ -194,8 +267,7 @@ async fn http_post(data: web::Data<SharedState>, key_value: web::Json<KeyValue>)
 
     let result = ProtoClientReply::decode(&result.0.as_slice()[0..result.1]).unwrap();
 
-    
-    HttpResponse::Ok().json(serde_json::json!(result))
+    send_response(&result, true).await
 }
 
 
