@@ -252,10 +252,17 @@ impl ClientHandlerTask for KVSTask {
         self.id
     }
 
+    #[allow(unreachable_code)]
     async fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &Sender<UncommittedResultSet>) -> anyhow::Result<()> {
         let req = &request.0;
         let resp = &request.1;
         self.total_work += 1;
+
+        // Short circuit for now.
+        return self.reply_receipt(resp, vec![ProtoTransactionOpResult {
+            success: true,
+            values: vec![],
+        }], None, reply_handler_tx).await;
         
         
         if req.is_none() {

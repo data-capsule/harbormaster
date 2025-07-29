@@ -35,7 +35,7 @@ max_write_buffers_to_merge = 1
 
 [node_config.worker_config]
 all_writes_max_batch_size = 1000
-self_writes_max_batch_size = 1000
+self_writes_max_batch_size = 4000
 batch_max_delay_ms = 1000
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
@@ -65,9 +65,9 @@ client_max_retry = 10
 max_concurrent_requests = 10
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 3000000
+num_keys = 1_000
 num_fields = 1
-val_size = 4096 # 4 KiB
+val_size = 8192 # 8 KiB
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -77,7 +77,7 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "4671bb874c8586572a9bd4b511906ffcec7e31af"
+git_hash = "a2cae65cade19cbff92b3d53d654cb1a8bac9e3e"
 repeats = 1
 num_clients = 2000
 num_storage_nodes = 3
