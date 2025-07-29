@@ -176,7 +176,7 @@ pub type CacheKey = Vec<u8>;
 
 pub struct CacheManager {
     config: AtomicPSLWorkerConfig,
-    command_rx: Receiver<CacheCommand>,
+    command_rx: tokio::sync::mpsc::Receiver<CacheCommand>,
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
     block_sequencer_tx: Sender<SequencerCommand>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
@@ -192,7 +192,7 @@ pub struct CacheManager {
 impl CacheManager {
     pub fn new(
         config: AtomicPSLWorkerConfig,
-        command_rx: Receiver<CacheCommand>,
+        command_rx: tokio::sync::mpsc::Receiver<CacheCommand>,
         block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
         block_sequencer_tx: Sender<SequencerCommand>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
@@ -226,9 +226,12 @@ impl CacheManager {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
+        let _chan_depth = self.config.get().rpc_config.channel_depth as usize;
+        let mut commands_vec = Vec::with_capacity(_chan_depth);
+        
         tokio::select! {
-            Some(command) = self.command_rx.recv() => {
-                self.handle_command(command).await;
+            _ = self.command_rx.recv_many(&mut commands_vec, _chan_depth) => {
+                self.handle_command(commands_vec).await;
             }
             Some((block_rx, sender)) = self.block_rx.recv() => {
                 let block = block_rx.await.expect("Block rx error");
@@ -273,38 +276,40 @@ impl CacheManager {
         );
     }
 
-    async fn handle_command(&mut self, command: CacheCommand) {
-        match command {
-            CacheCommand::Get(key, response_tx) => {
-                let res = self.cache.get(&key).map(|v| (v.value.clone(), v.seq_num));
-                let _ = response_tx.send(res.ok_or(CacheError::KeyNotFound));
+    async fn handle_command(&mut self, commands: Vec<CacheCommand>) {
+        for command in commands {
+            match command {
+                CacheCommand::Get(key, response_tx) => {
+                    let res = self.cache.get(&key).map(|v| (v.value.clone(), v.seq_num));
+                    let _ = response_tx.send(res.ok_or(CacheError::KeyNotFound));
 
-                // TODO: Fill from checkpoint if key not found.
-            }
-            CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
-                // if self.cache.contains_key(&key) {
-                //     let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
-                //     response_tx.send(Ok(seq_num));
-                //         // .unwrap();
-                    
-                //     // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
-                //     return;
-                // }
+                    // TODO: Fill from checkpoint if key not found.
+                }
+                CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
+                    if self.cache.contains_key(&key) {
+                        let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
+                        response_tx.send(Ok(seq_num));
+                            // .unwrap();
+                        
+                        self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
+                        return;
+                    }
 
-                let cached_value = CachedValue::new(value.clone(), val_hash.clone());
-                // self.cache.insert(key.clone(), cached_value);
-                response_tx.send(Ok(1));
-                // .unwrap();
-                // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
+                    let cached_value = CachedValue::new(value.clone(), val_hash.clone());
+                    self.cache.insert(key.clone(), cached_value);
+                    response_tx.send(Ok(1));
+                    // .unwrap();
+                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
 
-            }
-            CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
-                unimplemented!();
-            }
-            CacheCommand::Commit => {
-                self.last_batch_time = Instant::now();
-                self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
-            }
+                }
+                CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
+                    unimplemented!();
+                }
+                CacheCommand::Commit => {
+                    self.last_batch_time = Instant::now();
+                    self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+                    }
+                }
         }
     }
 

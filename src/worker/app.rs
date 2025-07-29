@@ -12,7 +12,7 @@ use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_prop
 use super::cache_manager::{CacheCommand, CacheError};
 
 pub struct CacheConnector {
-    cache_tx: Sender<CacheCommand>,
+    cache_tx: tokio::sync::mpsc::Sender<CacheCommand>,
 }
 
 // const NUM_WORKER_THREADS: usize = 4;
@@ -43,7 +43,7 @@ impl FutureSeqNum {
 }
 
 impl CacheConnector {
-    pub fn new(cache_tx: Sender<CacheCommand>) -> Self {
+    pub fn new(cache_tx: tokio::sync::mpsc::Sender<CacheCommand>) -> Self {
         Self { cache_tx }
     }
 
@@ -86,14 +86,14 @@ impl CacheConnector {
     pub async fn dispatch_commit_request(&self) {
         let command = CacheCommand::Commit;
 
-        // self.cache_tx.send(command).await;
+        self.cache_tx.send(command).await;
     }
 }
 
 pub type UncommittedResultSet = (Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, Option<u64> /* Some(potential seq_num; wait till committed) | None(reply immediately) */);
 
 pub trait ClientHandlerTask {
-    fn new(cache_tx: Sender<CacheCommand>, id: usize) -> Self;
+    fn new(cache_tx: tokio::sync::mpsc::Sender<CacheCommand>, id: usize) -> Self;
     fn get_cache_connector(&self) -> &CacheConnector;
     fn get_id(&self) -> usize;
     fn get_total_work(&self) -> usize; // Useful for throghput calculation.
@@ -102,7 +102,7 @@ pub trait ClientHandlerTask {
 
 pub struct PSLAppEngine<T: ClientHandlerTask> {
     config: AtomicPSLWorkerConfig,
-    cache_tx: Sender<CacheCommand>,
+    cache_tx: tokio::sync::mpsc::Sender<CacheCommand>,
     client_command_rx: Receiver<TxWithAckChanTag>,
     commit_tx_spawner: tokio::sync::broadcast::Sender<u64>,
     handles: JoinSet<()>,
@@ -111,7 +111,7 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
 }
 
 impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
-    pub fn new(config: AtomicPSLWorkerConfig, cache_tx: Sender<CacheCommand>, client_command_rx: Receiver<TxWithAckChanTag>, commit_tx_spawner: tokio::sync::broadcast::Sender<u64>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, cache_tx: tokio::sync::mpsc::Sender<CacheCommand>, client_command_rx: Receiver<TxWithAckChanTag>, commit_tx_spawner: tokio::sync::broadcast::Sender<u64>) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         Self {
             config,
@@ -238,7 +238,7 @@ pub struct KVSTask {
 }
 
 impl ClientHandlerTask for KVSTask {
-    fn new(cache_tx: Sender<CacheCommand>, id: usize) -> Self {
+    fn new(cache_tx: tokio::sync::mpsc::Sender<CacheCommand>, id: usize) -> Self {
         Self {
             cache_connector: CacheConnector::new(cache_tx),
             id,
