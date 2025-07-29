@@ -284,16 +284,18 @@ impl CacheManager {
             CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
                 if self.cache.contains_key(&key) {
                     let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
-                    response_tx.send(Ok(seq_num)).unwrap();
+                    response_tx.send(Ok(seq_num));
+                        // .unwrap();
                     
-                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
+                    // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
                     return;
                 }
 
                 let cached_value = CachedValue::new(value.clone(), val_hash.clone());
                 self.cache.insert(key.clone(), cached_value);
-                response_tx.send(Ok(1)).unwrap();
-                self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
+                response_tx.send(Ok(1));
+                // .unwrap();
+                // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
 
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {

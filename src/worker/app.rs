@@ -69,12 +69,16 @@ impl CacheConnector {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
-        let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
+        // let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
+        
+        // Short circuit for now.
+        let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::DontBother, response_tx);
 
         self.cache_tx.send(command).await;
 
-        let result = response_rx.await.unwrap()?;
-        std::result::Result::Ok((result, rx))
+        // let result = response_rx.await.unwrap()?;
+        // std::result::Result::Ok((result, rx))
+        std::result::Result::Ok((1, rx))
     }
 
     pub async fn dispatch_commit_request(&self) {
@@ -258,11 +262,11 @@ impl ClientHandlerTask for KVSTask {
         let resp = &request.1;
         self.total_work += 1;
 
-        // Short circuit for now.
-        return self.reply_receipt(resp, vec![ProtoTransactionOpResult {
-            success: true,
-            values: vec![],
-        }], None, reply_handler_tx).await;
+        // // Short circuit for now.
+        // return self.reply_receipt(resp, vec![ProtoTransactionOpResult {
+        //     success: true,
+        //     values: vec![],
+        // }], None, reply_handler_tx).await;
         
         
         if req.is_none() {

@@ -67,7 +67,7 @@ max_concurrent_requests = 10
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 1_000
 num_fields = 1
-val_size = 8192 # 8 KiB
+val_size = 100 # 8 KiB
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -77,7 +77,7 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "a2cae65cade19cbff92b3d53d654cb1a8bac9e3e"
+git_hash = "018359c095aeca831dbf8bc261a4dcef3acf541b"
 repeats = 1
 num_clients = 2000
 num_storage_nodes = 3
