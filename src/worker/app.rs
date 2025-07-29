@@ -78,7 +78,6 @@ impl CacheConnector {
         let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::DontBother, response_tx);
 
         self.cache_tx.send(command).await;
-        tx.send(1);
         // let result = response_rx.await.unwrap()?;
         // std::result::Result::Ok((result, rx))
         std::result::Result::Ok((1, rx))
@@ -367,20 +366,20 @@ impl KVSTask {
 
         self.cache_connector.dispatch_commit_request().await;
 
-        if atleast_one_write {
+        // if atleast_one_write {
 
-            // Find the highest block seq num needed.
-            while let Some(seq_num) = block_seq_num_rx_vec.next().await {
-                if seq_num.is_err() {
-                    continue;
-                }
+        //     // Find the highest block seq num needed.
+        //     while let Some(seq_num) = block_seq_num_rx_vec.next().await {
+        //         if seq_num.is_err() {
+        //             continue;
+        //         }
 
-                let seq_num = seq_num.unwrap();
-                highest_committed_block_seq_num_needed = std::cmp::max(highest_committed_block_seq_num_needed, seq_num);
-            }
+        //         let seq_num = seq_num.unwrap();
+        //         highest_committed_block_seq_num_needed = std::cmp::max(highest_committed_block_seq_num_needed, seq_num);
+        //     }
 
-            return Ok((results, Some(highest_committed_block_seq_num_needed)));
-        }
+        //     return Ok((results, Some(highest_committed_block_seq_num_needed)));
+        // }
 
         Ok((results, None))
     }
