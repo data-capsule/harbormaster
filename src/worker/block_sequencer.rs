@@ -115,6 +115,7 @@ pub struct BlockSequencer {
     storage_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
 
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
+    last_signed_seq_num: u64,
 }
 
 impl BlockSequencer {
@@ -135,6 +136,7 @@ impl BlockSequencer {
             node_broadcaster_tx,
             storage_broadcaster_tx,
             log_timer,
+            last_signed_seq_num: 0,
         }
     }
 
@@ -230,6 +232,7 @@ impl BlockSequencer {
             None, // No vector for the block that goes to storage.
         );
 
+        info!("All writes: {} Self writes: {}", all_writes.tx_list.len(), self_writes.tx_list.len());
 
         let (all_writes_rx, _, _) = self.crypto.prepare_block(
             all_writes,
@@ -238,9 +241,19 @@ impl BlockSequencer {
         ).await;
 
         let parent_hash_rx = self.last_block_hash.take();
+
+
+        // let must_sign = if self.last_signed_seq_num + self.config.get().worker_config.signature_max_delay_blocks < seq_num {
+        //     self.last_signed_seq_num = seq_num;
+        //     true
+        // } else {
+        //     false
+        // };
+        let must_sign = false;
+
         let (self_writes_rx, hash_rx, hash_rx2) = self.crypto.prepare_block(
             self_writes,
-            true,
+            must_sign,
             parent_hash_rx,
         ).await;
         self.last_block_hash = FutureHash::Future(hash_rx);

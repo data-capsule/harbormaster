@@ -26,17 +26,17 @@ signature_max_delay_blocks = 10
 signature_max_delay_ms = 10000
 num_crypto_workers = 5
 view_timeout_ms = 4000
-batch_max_delay_ms = 2
+batch_max_delay_ms = 1000
 
 [node_config.consensus_config.log_storage_config.RocksDB]
-write_buffer_size = 2147483648
-max_write_buffer_number = 1
+write_buffer_size = 67_108_864 # 64 MiB
+max_write_buffer_number = 8
 max_write_buffers_to_merge = 1
 
 [node_config.worker_config]
 all_writes_max_batch_size = 1000
 self_writes_max_batch_size = 1000
-batch_max_delay_ms = 2
+batch_max_delay_ms = 1000
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
 num_crypto_workers = 5
@@ -65,9 +65,9 @@ client_max_retry = 10
 max_concurrent_requests = 10
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 300000
+num_keys = 3000000
 num_fields = 1
-val_size = 1000
+val_size = 4096 # 4 KiB
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -77,9 +77,9 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
+git_hash = "4671bb874c8586572a9bd4b511906ffcec7e31af"
 repeats = 1
-num_clients = 100
+num_clients = 2000
 num_storage_nodes = 3
 num_sequencer_nodes = 0
 node_distribution = "uniform"
@@ -90,7 +90,8 @@ duration = 60
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
-num_nodes = [1, 2, 4, 8]
+# num_nodes = [1, 2, 4, 8]
+num_nodes = [8]
 
 [[results]]
 name = "throughput_client_sweep"
