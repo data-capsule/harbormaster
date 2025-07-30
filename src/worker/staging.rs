@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedSender;
 use hashbrown::{HashMap, HashSet};
-use log::{info, warn};
+use log::{info, trace, warn};
 use tokio::sync::Mutex;
 
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
@@ -82,7 +82,7 @@ impl Staging {
                 // Ordering here is important.
                 // notify_downstream() needs to know the old commit index.
                 // clean_up_buffer only works if the commit index is updated.
-                info!("Committing blocks up to {}", new_ci);
+                trace!("Committing blocks up to {}", new_ci);
                 self.notify_downstream(new_ci).await;
                 self.commit_index = new_ci;
             }
@@ -148,7 +148,7 @@ impl Staging {
         let me = SenderType::Auth(me, 0);
         for block in &self.block_buffer {
 
-            info!("Block n = {} size = {}", block.block.n, block.block.tx_list.len());
+            trace!("Block n = {} size = {}", block.block.n, block.block.tx_list.len());
             if block.block.n > self.commit_index && block.block.n <= new_ci {
                 let _ = self.logserver_tx.send((me.clone(), block.clone())).await;
             }

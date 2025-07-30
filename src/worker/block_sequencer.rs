@@ -1,7 +1,7 @@
 use std::{fmt::{self, Display}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use hashbrown::HashMap;
-use log::{info, warn};
+use log::{debug, info, trace, warn};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{default_hash, CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::{consensus::{ProtoBlock, ProtoVectorClock, ProtoVectorClockEntry}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}}, rpc::SenderType, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
@@ -189,7 +189,7 @@ impl BlockSequencer {
                 self.maybe_prepare_new_block().await;
             },
             SequencerCommand::ForceMakeNewBlock => {
-                info!("Force making new block 2");
+                debug!("Force making new block 2");
                 self.force_prepare_new_block().await;
             }
         }
@@ -216,7 +216,7 @@ impl BlockSequencer {
         }
 
         
-        info!("Force making new block 3. All write op bag: {} Self write op bag: {}", self.all_write_op_bag.len(), self.self_write_op_bag.len());
+        trace!("Force making new block 3. All write op bag: {} Self write op bag: {}", self.all_write_op_bag.len(), self.self_write_op_bag.len());
         if self.all_write_op_bag.is_empty() {
             return;
         }

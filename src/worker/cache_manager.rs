@@ -1,7 +1,7 @@
 use std::{pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use hashbrown::HashMap;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
@@ -245,9 +245,8 @@ impl CacheManager {
 
                 // This is safe to do here.
                 // The tick won't interrupt handle_command or handle_block's logic.
-                // if self.last_batch_time.elapsed() > Duration::from_millis(self.config.get().worker_config.batch_max_delay_ms) {
-                //     self.last_batch_time = Instant::now();
-                info!("Force making new block");
+
+                debug!("Force making new block");
                 self.block_sequencer_tx.send(SequencerCommand::ForceMakeNewBlock).await;
                 // }
             }
