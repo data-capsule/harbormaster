@@ -248,7 +248,7 @@ impl BlockSequencer {
             None, // No vector for the block that goes to storage.
         );
 
-        info!("All writes: {} Self writes: {}", all_writes.tx_list.len(), self_writes.tx_list.len());
+        trace!("All writes: {} Self writes: {}", all_writes.tx_list.len(), self_writes.tx_list.len());
 
         let (all_writes_rx, _, _) = self.crypto.prepare_block(
             all_writes,
