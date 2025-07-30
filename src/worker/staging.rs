@@ -102,10 +102,13 @@ impl Staging {
     }
 
     fn get_commit_threshold(&self) -> usize {
-
-        // TODO: This is not correct. Change the config to reflect the quorum size.
         let n = self.config.get().worker_config.storage_list.len() as usize;
-        n / 2 + 1
+
+        if n == 0 {
+            0
+        } else {
+            n / 2 + 1
+        }
     }
 
     fn try_commit_blocks(&mut self) -> u64 {
