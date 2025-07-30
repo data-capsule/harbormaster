@@ -250,16 +250,16 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
                     app.forward_replies(known_ci, &reply_tx_vec).await;
                 }
-                _ = log_timer.wait() => {
-                    let mut total_work = 0;
-                    for tx in &total_work_txs {
-                        let (_tx, _rx) = tokio::sync::oneshot::channel();
-                        tx.send(_tx).await.unwrap();
+                // _ = log_timer.wait() => {
+                //     let mut total_work = 0;
+                //     for tx in &total_work_txs {
+                //         let (_tx, _rx) = tokio::sync::oneshot::channel();
+                //         tx.send(_tx).await.unwrap();
 
-                        total_work += _rx.await.unwrap();
-                    }
-                    info!("Total requests processed: {}", total_work);
-                }
+                //         total_work += _rx.await.unwrap();
+                //     }
+                //     info!("Total requests processed: {}", total_work);
+                // }
             }
         }
         Ok(())
