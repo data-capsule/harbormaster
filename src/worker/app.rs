@@ -1,11 +1,11 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::Ok;
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
 use log::{error, info, warn};
 use num_bigint::{BigInt, Sign};
 use prost::{DecodeError, Message as _};
-use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver}, Mutex}, task::JoinSet};
+use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::BlockSeqNumQuery};
 
@@ -97,7 +97,7 @@ pub trait ClientHandlerTask {
     fn get_cache_connector(&self) -> &CacheConnector;
     fn get_id(&self) -> usize;
     fn get_total_work(&self) -> usize; // Useful for throghput calculation.
-    fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &Sender<UncommittedResultSet>) -> impl Future<Output = Result<(), anyhow::Error>> + Send + Sync;
+    fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> impl Future<Output = Result<(), anyhow::Error>> + Send + Sync;
 }
 
 pub struct PSLAppEngine<T: ClientHandlerTask> {
@@ -107,6 +107,8 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
     commit_rx: UnboundedReceiver<u64>,
     handles: JoinSet<()>,
     client_handler_phantom: PhantomData<T>,
+    pending_replies: HashMap<u64, Vec<(Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64)>>,
+    __reply_rr_cnt: usize,
     // log_timer: Arc<Pin<Box<ResettableTimer>>>,
 }
 
@@ -119,7 +121,56 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
             commit_rx,
             handles: JoinSet::new(),
             client_handler_phantom: PhantomData,
+            pending_replies: HashMap::new(),
+            __reply_rr_cnt: 0,
             // log_timer,
+        }
+    }
+
+    async fn send_reply(result: Vec<ProtoTransactionOpResult>, ack_chan: MsgAckChanWithTag, seq_num: u64) {
+        let reply = ProtoTransactionReceipt {
+            block_n: seq_num,
+            tx_n: 0,
+            results: Some(ProtoTransactionResult {
+                result: result.clone(),
+            }),
+            await_byz_response: false,
+            byz_responses: vec![],
+            req_digest: default_hash(),
+        };
+
+        let reply = ProtoClientReply {
+            client_tag: ack_chan.1,
+            reply: Some(crate::proto::client::proto_client_reply::Reply::Receipt(reply)),
+        };
+
+        let buf = reply.encode_to_vec();
+        let len = buf.len();
+        let msg = PinnedMessage::from(buf, len, SenderType::Anon);
+        let _ = ack_chan.0.send((msg, LatencyProfile::new())).await;
+
+    }
+
+    async fn client_reply_handler(reply_processor_rx: Receiver<Vec<(Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64)>>) {
+        while let Some(results) = reply_processor_rx.recv().await {
+            for (result, ack_chan, seq_num) in results {
+                Self::send_reply(result, ack_chan, seq_num).await;
+            }
+        }
+    }
+    
+
+    async fn forward_replies(&mut self, known_ci: u64, reply_tx_vec: &Vec<Sender<Vec<(Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64)>>>) {
+        let committed_seq_nums = self.pending_replies.keys()
+            .filter(|seq_num| **seq_num <= known_ci)
+            .map(|seq_num| *seq_num)
+            .collect::<Vec<_>>();
+
+        for seq_num in committed_seq_nums {
+            let replies = self.pending_replies.remove(&seq_num).unwrap();
+            let idx = self.__reply_rr_cnt;
+            self.__reply_rr_cnt = (idx + 1) % reply_tx_vec.len();
+            let _ = reply_tx_vec[idx].send(replies).await;
         }
     }
 
@@ -127,9 +178,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
         let mut app = app.lock().await;
         let _chan_depth = app.config.get().rpc_config.channel_depth as usize;
 
-        // We are relying on the MPMC functionality of async-channel.
-        // tokio channel won't work here.
-        let (reply_tx, reply_rx) = make_channel(_chan_depth);
+        let (reply_tx, mut reply_rx) = unbounded_channel();
 
         let mut total_work_txs: Vec<crate::utils::channel::AsyncSenderWrapper<tokio::sync::oneshot::Sender<usize>>> = Vec::new();
 
@@ -160,83 +209,43 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
             });
         }
 
-        let mut _commit_tx_vec = Vec::new();
+        let mut reply_tx_vec = Vec::new();
 
-        for _ in 0..app.config.get().worker_config.num_replier_threads_per_worker {
-            let _reply_rx = reply_rx.clone();
-            let (_commit_tx, mut _commit_rx) = tokio::sync::mpsc::channel(_chan_depth);
-            _commit_tx_vec.push(_commit_tx);
-
-            app.handles.spawn(async move {
-                let mut commit_seq_num = 0;
-                let mut pending_results = Vec::new();
-                let mut ci_vec = Vec::new();
-                loop {
-                    ci_vec.clear();
-                    let msgs_pending = _commit_rx.len();
-                    tokio::select! {
-                        _ = _commit_rx.recv_many(&mut ci_vec, msgs_pending) => {
-                            let max_ci = ci_vec.iter().max().unwrap_or(&0);
-                            commit_seq_num = if *max_ci > commit_seq_num {
-                                *max_ci
-                            } else {
-                                commit_seq_num
-                            };
-                            
-                        },
-                        Some(result) = _reply_rx.recv() => {
-                            let (result, ack_chan, seq_num) = result;
-                            let seq_num = seq_num.unwrap_or(0);
-                            pending_results.push((result, ack_chan, seq_num));
-                        }
-                    }
-
-
-
-                    for (result, ack_chan, seq_num) in &pending_results {
-                        if *seq_num > commit_seq_num {
-                            continue;
-                        }
-
-                        let reply = ProtoTransactionReceipt {
-                            block_n: *seq_num,
-                            tx_n: 0,
-                            results: Some(ProtoTransactionResult {
-                                result: result.clone(),
-                            }),
-                            await_byz_response: false,
-                            byz_responses: vec![],
-                            req_digest: default_hash(),
-                        };
-
-                        let reply = ProtoClientReply {
-                            client_tag: ack_chan.1,
-                            reply: Some(crate::proto::client::proto_client_reply::Reply::Receipt(reply)),
-                        };
-
-                        let buf = reply.encode_to_vec();
-                        let len = buf.len();
-                        let msg = PinnedMessage::from(buf, len, SenderType::Anon);
-                        ack_chan.0.send((msg, LatencyProfile::new())).await;
-
-                    }
-
-                    pending_results.retain(|(_, _, seq_num)| *seq_num > commit_seq_num);
-                }  
-            });
+        for id in 0..app.config.get().worker_config.num_replier_threads_per_worker {
+            let (_reply_tx, _reply_rx) = make_channel(_chan_depth);
+            app.handles.spawn(Self::client_reply_handler(_reply_rx));
+            reply_tx_vec.push(_reply_tx);
         }
 
+        let mut ci_vec = Vec::new();
+        let msgs_pending = app.commit_rx.len();
+        let mut known_ci = 0;
+        let mut reply_vec = Vec::new();
+
         loop {
-            let mut ci_vec = Vec::new();
-            let msgs_pending = app.commit_rx.len();
+            ci_vec.clear();
+            reply_vec.clear();
+
             tokio::select! {
                 _ = app.commit_rx.recv_many(&mut ci_vec, msgs_pending) => {
                     let max_ci = ci_vec.iter().max().unwrap_or(&0);
 
-                    for tx in &_commit_tx_vec {
-                        let _ = tx.send(*max_ci).await;
+                    if *max_ci > known_ci {
+                        known_ci = *max_ci;
                     }
+
+                    app.forward_replies(known_ci, &reply_tx_vec).await;
+
+
                 },
+                _ = reply_rx.recv_many(&mut reply_vec, msgs_pending) => {
+                    for (result, ack_chan, seq_num) in reply_vec.drain(..) {
+                        let seq_num = seq_num.unwrap_or(0);
+                        app.pending_replies.entry(seq_num)
+                            .or_insert(Vec::new())
+                            .push((result, ack_chan, seq_num));
+                    }
+                }
                 _ = log_timer.wait() => {
                     let mut total_work = 0;
                     for tx in &total_work_txs {
@@ -282,7 +291,7 @@ impl ClientHandlerTask for KVSTask {
     }
 
     #[allow(unreachable_code)]
-    async fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &Sender<UncommittedResultSet>) -> anyhow::Result<()> {
+    async fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> anyhow::Result<()> {
         let req = &request.0;
         let resp = request.1;
         self.total_work += 1;
@@ -407,15 +416,15 @@ impl KVSTask {
         Ok((results, None))
     }
 
-    async fn reply_receipt(&self, resp: MsgAckChanWithTag, results: Vec<ProtoTransactionOpResult>, seq_num: Option<u64>, reply_handler_tx: &Sender<UncommittedResultSet>) -> anyhow::Result<()> {
-        reply_handler_tx.send((results, resp, seq_num)).await;
+    async fn reply_receipt(&self, resp: MsgAckChanWithTag, results: Vec<ProtoTransactionOpResult>, seq_num: Option<u64>, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> anyhow::Result<()> {
+        reply_handler_tx.send((results, resp, seq_num));
         Ok(())
     }
 
-    async fn reply_invalid(&self, resp: MsgAckChanWithTag, reply_handler_tx: &Sender<UncommittedResultSet>) -> anyhow::Result<()> {
+    async fn reply_invalid(&self, resp: MsgAckChanWithTag, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> anyhow::Result<()> {
         // For now, just send a blank result.
         
-        reply_handler_tx.send((vec![], resp, None)).await;
+        reply_handler_tx.send((vec![], resp, None));
         Ok(())
     }
 

@@ -286,7 +286,7 @@ impl CacheManager {
 
                     // TODO: Fill from checkpoint if key not found.
                 }
-                CacheCommand::Put(key, mut value, val_hash, seq_num_query, response_tx) => {
+                CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
                     if self.cache.contains_key(&key) {
                         let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
                         response_tx.send(Ok(seq_num));
