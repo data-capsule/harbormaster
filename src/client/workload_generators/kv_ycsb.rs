@@ -1,12 +1,13 @@
 use std::{process::exit, time::Instant};
 
 use log::info;
+use num_bigint::{BigInt, Sign};
 use rand::distributions::{Uniform, WeightedIndex};
 use rand_chacha::ChaCha20Rng;
 use rand::prelude::*;
 use zipf::ZipfDistribution;
 
-use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
+use crate::{config::KVReadWriteYCSB, crypto::hash, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
 use super::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode};
 
@@ -42,6 +43,8 @@ pub struct KVReadWriteYCSBGenerator {
 
     read_write_weights: [(TxOpType, i32); 2],
     read_write_dist: WeightedIndex<i32>,
+
+    field_start_idx: usize,
 
     crash_byz_weights: [(TxPhaseType, i32); 2],
     crash_byz_dist: WeightedIndex<i32>,
@@ -85,6 +88,12 @@ impl KVReadWriteYCSBGenerator {
         let key_selection_dist = ZipfDistribution::new(config.num_keys, config.zipf_exponent).unwrap();
         
         let val_gen_dist = Uniform::new('a' as u8, 'z' as u8);
+
+        let hostname = std::env::var("HOSTNAME").unwrap();
+        let hostname_hash = BigInt::from_bytes_be(Sign::Plus, &hash(hostname.as_bytes()));
+        let field_start_idx = *(hostname_hash.to_u64_digits().1.last().unwrap()) as usize; // mod 10
+
+
         KVReadWriteYCSBGenerator {
             config: config.clone(),
             rng,
@@ -96,7 +105,9 @@ impl KVReadWriteYCSBGenerator {
             val_gen_dist,
             last_request_type: TxOpType::Read,
             load_phase_cnt: client_idx,
-            total_clients
+            total_clients,
+
+            field_start_idx,
         }
     
     }
@@ -106,7 +117,8 @@ impl KVReadWriteYCSBGenerator {
     }
 
     fn get_field_str_from_num(&self, num: usize) -> String {
-        format!(":field{}", num)
+        let field_num = (self.field_start_idx * self.config.num_fields) + num;
+        format!(":field{}", field_num)
     }
 
     fn get_next_val(&mut self) -> Vec<u8> {

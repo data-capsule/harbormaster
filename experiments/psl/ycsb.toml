@@ -41,7 +41,7 @@ signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
 num_crypto_workers = 10
 num_worker_threads_per_worker = 1
-num_replier_threads_per_worker = 1
+num_replier_threads_per_worker = 20
 
 
 [node_config.app_config]
@@ -62,7 +62,7 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 5
+max_concurrent_requests = 20
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 1_000_000
@@ -77,7 +77,7 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "fc16784d2ae387fba6b8d5043a6584de2225e31a"
+git_hash = "5a5d005fa92fc10ab73465c2747bb25d8777660c"
 repeats = 1
 num_clients = 1200
 num_storage_nodes = 0
