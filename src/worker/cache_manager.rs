@@ -292,7 +292,7 @@ impl CacheManager {
                             // .unwrap();
                         
                         self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
-                        return;
+                        continue;
                     }
 
                     let cached_value = CachedValue::new(value.clone(), val_hash.clone());
@@ -308,8 +308,8 @@ impl CacheManager {
                 CacheCommand::Commit => {
                     self.last_batch_time = Instant::now();
                     self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
-                    }
                 }
+            }
         }
     }
 
