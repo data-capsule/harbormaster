@@ -89,8 +89,8 @@ impl KVReadWriteYCSBGenerator {
         
         let val_gen_dist = Uniform::new('a' as u8, 'z' as u8);
 
-        let hostname = std::env::var("HOSTNAME").unwrap();
-        let hostname_hash = BigInt::from_bytes_be(Sign::Plus, &hash(hostname.as_bytes()));
+        let hostname = std::process::Command::new("uname").arg("-n").output().unwrap().stdout;
+        let hostname_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&hostname));
         let field_start_idx = *(hostname_hash.to_u64_digits().1.last().unwrap()) as usize; // mod 10
 
 
