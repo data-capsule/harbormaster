@@ -39,7 +39,7 @@ self_writes_max_batch_size = 1000
 batch_max_delay_ms = 100
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
-num_crypto_workers = 5
+num_crypto_workers = 10
 num_worker_threads_per_worker = 4
 num_replier_threads_per_worker = 20
 
@@ -66,7 +66,7 @@ max_concurrent_requests = 100
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 10_000_000
-num_fields = 1000
+num_fields = 100
 val_size = 100 # 8 KiB
 linearizable_reads = false
 byz_commit_ratio = 0.0
@@ -77,21 +77,21 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "492db778d02211f4f4d77da27c48a764267c4139"
+git_hash = "45ca672e15f91b57297dbb6c297040a94394700e"
 repeats = 1
 num_clients = 2000
-num_storage_nodes = 3
+num_storage_nodes = 0
 num_sequencer_nodes = 0
 node_distribution = "uniform"
 storage_distribution = "uniform"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
-duration = 60
+duration = 300
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
 # num_nodes = [1, 2, 4, 8]
-num_nodes = [8]
+num_nodes = [1]
 
 [[results]]
 name = "throughput_client_sweep"

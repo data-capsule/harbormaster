@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::{HashMap, HashSet};
-use log::warn;
+use log::{info, warn};
 use tokio::sync::Mutex;
 
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
@@ -81,6 +81,7 @@ impl Staging {
                 // Ordering here is important.
                 // notify_downstream() needs to know the old commit index.
                 // clean_up_buffer only works if the commit index is updated.
+                info!("Committing blocks up to {}", new_ci);
                 self.notify_downstream(new_ci).await;
                 self.commit_index = new_ci;
             }

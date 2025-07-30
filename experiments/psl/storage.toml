@@ -2,9 +2,10 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-mode = "lan-tiny"
+provider = "aws"
+mode = "no-sequencer"
 ssh_key = "cluster_key.pem"
-ssh_user = "pftadmin"
+ssh_user = "psladmin"
 node_port_base = 3000
 
 
@@ -63,6 +64,7 @@ payload_size = 1_048_576 # 1 MiB
 [[experiments]]
 name = "storage_sig_1"
 type = "psl_storage"
+git_hash = "45ca672e15f91b57297dbb6c297040a94394700e"
 repeats = 1
 num_nodes = 1 # This is fixed for this experiment.
 node_distribution = "uniform"
@@ -79,6 +81,7 @@ num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
 [[experiments]]
 name = "storage_sig_2"
 type = "psl_storage"
+git_hash = "45ca672e15f91b57297dbb6c297040a94394700e"
 repeats = 1
 num_nodes = 1 # This is fixed for this experiment.
 node_distribution = "uniform"
@@ -96,6 +99,7 @@ num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
 [[experiments]]
 name = "storage_sig_10"
 type = "psl_storage"
+git_hash = "45ca672e15f91b57297dbb6c297040a94394700e"
 repeats = 1
 num_nodes = 1 # This is fixed for this experiment.
 node_distribution = "uniform"
@@ -111,6 +115,7 @@ num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
 [[experiments]]
 name = "storage_sig_20"
 type = "psl_storage"
+git_hash = "45ca672e15f91b57297dbb6c297040a94394700e"
 repeats = 1
 num_nodes = 1 # This is fixed for this experiment.
 node_distribution = "uniform"
@@ -127,6 +132,7 @@ num_clients = [1, 2, 5, 10, 20, 50, 100, 200]
 [[experiments]]
 name = "storage_sig_inf"
 type = "psl_storage"
+git_hash = "45ca672e15f91b57297dbb6c297040a94394700e"
 repeats = 1
 num_nodes = 1 # This is fixed for this experiment.
 node_distribution = "uniform"
