@@ -93,7 +93,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let (backpressure_tx, backpressure_rx) = make_channel(max_outstanding_requests);
 
         // This is to let the checker task know about new requests.
-        let (generator_tx, generator_rx) = make_channel(10000000);
+        let (generator_tx, generator_rx) = make_channel(max_outstanding_requests);
 
         let _client = worker.client.clone();
         let _stat_tx = worker.stat_tx.clone();
@@ -414,7 +414,9 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
                     self.send_request(&mut req, &node_list, &mut curr_leader_id, &mut curr_round_robin_id, &mut outstanding_requests).await;
 
+                    let __queue_start = Instant::now();
                     generator_tx.send(req.get_checker_task()).await.unwrap();
+                    info!("Queue latency: {} us", __queue_start.elapsed().as_micros());
                     outstanding_requests.insert(req.id, req);
                     total_requests += 1;
                 },
@@ -501,11 +503,17 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     let recv_node = &node_list[(*curr_round_robin_id) % node_list.len()];
                     // *curr_round_robin_id = *curr_round_robin_id + 1;
                     req.last_sent_to = recv_node.clone();
-                    PinnedClient::send(
+
+                    let __send_start = Instant::now();
+                    let res = PinnedClient::send(
                         &self.client,
                         recv_node,
                         MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon),
-                    ).await
+                    ).await;
+
+                    info!("Send latency: {} us", __send_start.elapsed().as_micros());
+
+                    res
                 },
             };
 
