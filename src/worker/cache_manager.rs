@@ -291,7 +291,7 @@ impl CacheManager {
                         response_tx.send(Ok(seq_num));
                             // .unwrap();
                         
-                        self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
+                        // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
                         continue;
                     }
 
@@ -299,15 +299,15 @@ impl CacheManager {
                     self.cache.insert(key.clone(), cached_value);
                     response_tx.send(Ok(1));
                     // .unwrap();
-                    self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
+                    // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
 
                 }
                 CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                     unimplemented!();
                 }
                 CacheCommand::Commit => {
-                    self.last_batch_time = Instant::now();
-                    self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+                    // self.last_batch_time = Instant::now();
+                    // self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
                 }
             }
         }

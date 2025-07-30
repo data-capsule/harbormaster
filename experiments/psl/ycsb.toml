@@ -36,7 +36,7 @@ max_write_buffers_to_merge = 1
 [node_config.worker_config]
 all_writes_max_batch_size = 1000
 self_writes_max_batch_size = 4000
-batch_max_delay_ms = 1000
+batch_max_delay_ms = 10
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
 num_crypto_workers = 5
@@ -77,7 +77,7 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "8633a4b724403b16c1719e4751eea7a26aba10e0"
+git_hash = "58278ad1a210f37c674f198c8d188ad46241ba1c"
 repeats = 1
 num_clients = 2000
 num_storage_nodes = 3
