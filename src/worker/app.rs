@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::Ok;
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
@@ -107,7 +107,7 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
     commit_rx: UnboundedReceiver<u64>,
     handles: JoinSet<()>,
     client_handler_phantom: PhantomData<T>,
-    pending_replies: HashMap<u64, Vec<(Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64)>>,
+    pending_replies: HashMap<u64, Vec<((Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64), Instant)>>,
     __reply_rr_cnt: usize,
     // log_timer: Arc<Pin<Box<ResettableTimer>>>,
 }
@@ -151,16 +151,17 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
     }
 
-    async fn client_reply_handler(reply_processor_rx: Receiver<Vec<(Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64)>>) {
+    async fn client_reply_handler(reply_processor_rx: Receiver<Vec<((Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64), Instant)>>) {
         while let Some(results) = reply_processor_rx.recv().await {
-            for (result, ack_chan, seq_num) in results {
+            for ((result, ack_chan, seq_num), start_time) in results {
+                info!("Reply latency: {} us", start_time.elapsed().as_micros());
                 Self::send_reply(result, ack_chan, seq_num).await;
             }
         }
     }
     
 
-    async fn forward_replies(&mut self, known_ci: u64, reply_tx_vec: &Vec<Sender<Vec<(Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64)>>>) {
+    async fn forward_replies(&mut self, known_ci: u64, reply_tx_vec: &Vec<Sender<Vec<((Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64), Instant)>>>) {
         let committed_seq_nums = self.pending_replies.keys()
             .filter(|seq_num| **seq_num <= known_ci)
             .map(|seq_num| *seq_num)
@@ -245,7 +246,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
                         let seq_num = seq_num.unwrap_or(0);
                         app.pending_replies.entry(seq_num)
                             .or_insert(Vec::new())
-                            .push((result, ack_chan, seq_num));
+                            .push(((result, ack_chan, seq_num), Instant::now()));
                     }
 
                     app.forward_replies(known_ci, &reply_tx_vec).await;
