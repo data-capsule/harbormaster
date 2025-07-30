@@ -245,6 +245,8 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
                             .or_insert(Vec::new())
                             .push((result, ack_chan, seq_num));
                     }
+
+                    app.forward_replies(known_ci, &reply_tx_vec).await;
                 }
                 _ = log_timer.wait() => {
                     let mut total_work = 0;
