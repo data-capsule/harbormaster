@@ -216,7 +216,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                     match resp.reply {
                         Some(client::proto_client_reply::Reply::Receipt(receipt)) => {
                             let __log_start = Instant::now();
-                            // let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
+                            let _ = stat_tx.send(ClientWorkerStat::CrashCommitLatency(req.start_time.elapsed())).await;
                             debug!("Log latency: {} us", __log_start.elapsed().as_micros());
 
                             let __backpressure_start = Instant::now();
