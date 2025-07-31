@@ -202,7 +202,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
                 loop {
                     tokio::select! {
-                        biased;
+                        // biased;
                         Some(command) = client_command_rx.recv() => {
                             handler_task.on_client_request(command, &_reply_tx).await;
                         }
