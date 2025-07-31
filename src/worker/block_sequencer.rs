@@ -186,11 +186,11 @@ impl BlockSequencer {
                 self.curr_vector_clock.advance(sender, block_seq_num);
             },
             SequencerCommand::MakeNewBlock => {
-                self.maybe_prepare_new_block().await;
+                // self.maybe_prepare_new_block().await;
             },
             SequencerCommand::ForceMakeNewBlock => {
                 debug!("Force making new block 2");
-                self.force_prepare_new_block().await;
+                // self.force_prepare_new_block().await;
             }
         }
     }
