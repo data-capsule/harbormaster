@@ -7,7 +7,7 @@ use num_bigint::{BigInt, Sign};
 use prost::{DecodeError, Message as _};
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::BlockSeqNumQuery};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer, AtomicStruct}, worker::block_sequencer::BlockSeqNumQuery};
 
 use super::cache_manager::{CacheCommand, CacheError};
 
@@ -42,6 +42,13 @@ impl FutureSeqNum {
     }
 }
 
+pub struct OptionalU64 {
+    pub val: Option<u64>,
+}
+
+pub type AtomicOptionalU64 = AtomicStruct<OptionalU64>;
+
+
 impl CacheConnector {
     pub fn new(cache_tx: flume::Sender<CacheCommand>) -> Self {
         Self { cache_tx }
@@ -68,14 +75,16 @@ impl CacheConnector {
         // must_wait_for_seq_num: bool,
     ) -> anyhow::Result<(u64 /* lamport ts */, tokio::sync::oneshot::Receiver<u64 /* block seq num */>), CacheError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        // let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let response_n = AtomicOptionalU64::new(OptionalU64 { val: None });
         // let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
 
         // TODO: Use the actual hash.
         let val_hash = BigInt::from(1);
         // let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
         // let command = CacheCommand::Put(key, vec![], val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
-        let command = CacheCommand::Put(key, vec![], val_hash, BlockSeqNumQuery::DontBother, response_tx, Instant::now());
+        let command = CacheCommand::Put(key, vec![], val_hash, BlockSeqNumQuery::DontBother, response_n.clone(), Instant::now());
         
         // Short circuit for now.
         // let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
@@ -85,7 +94,14 @@ impl CacheConnector {
         // info!("Cache tx time: {} us", __cache_tx_time.elapsed().as_micros());
 
         let __result_rx_time = Instant::now();
-        let result = response_rx.await.unwrap()?;
+        // let result = response_rx.await.unwrap()?;
+        let result = loop {
+            if let Some(val) = response_n.get().val {
+                break val;
+            }
+
+            // Busy wait.
+        };
         info!("Response rx time: {} us", __result_rx_time.elapsed().as_micros());
         // let result = 1;
         tx.send(0);

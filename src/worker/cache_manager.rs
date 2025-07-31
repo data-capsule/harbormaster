@@ -5,7 +5,7 @@ use log::{debug, error, info, warn};
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex};
-use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::BlockSeqNumQuery};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{app::{AtomicOptionalU64, OptionalU64}, block_sequencer::BlockSeqNumQuery}};
 use crate::worker::block_sequencer::SequencerCommand;
 
 #[derive(Error, Debug)]
@@ -26,7 +26,7 @@ pub enum CacheCommand {
         Vec<u8> /* Value */,
         BigInt /* Val Hash */,
         BlockSeqNumQuery,
-        oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
+        AtomicOptionalU64,
         Instant,
     ),
     // Cas(
@@ -300,7 +300,7 @@ impl CacheManager {
                     
                     if self.cache.contains_key(&key) {
                         let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
-                        response_tx.send(Ok(seq_num));
+                        response_tx.set(Box::new(OptionalU64 { val: Some(seq_num) }));
                             // .unwrap();
                         
                         // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new_with_seq_num(value, seq_num, val_hash), seq_num_query }).await;
@@ -316,7 +316,7 @@ impl CacheManager {
 
                     // let cached_value = CachedValue::new(value.clone(), val_hash.clone());
                     // self.cache.insert(key.clone(), cached_value);
-                    response_tx.send(Ok(1));
+                    response_tx.set(Box::new(OptionalU64 { val: Some(1) }));
 
                     match seq_num_query {
                         BlockSeqNumQuery::DontBother => {}
