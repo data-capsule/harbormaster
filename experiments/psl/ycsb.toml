@@ -40,8 +40,8 @@ batch_max_delay_ms = 2
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
 num_crypto_workers = 10
-num_worker_threads_per_worker = 30
-num_replier_threads_per_worker = 30
+num_worker_threads_per_worker = 4
+num_replier_threads_per_worker = 4
 
 
 [node_config.app_config]
@@ -81,7 +81,7 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "cbb85780b4c9f5f6dcc8f34dac8a1680ee0adf04"
+git_hash = "0836b644b0c064adf8e325f1da5544e62f451e0a"
 repeats = 1
 # num_clients = 80 <=== This saturates 1 node when fully short circuited.
 num_clients = 80

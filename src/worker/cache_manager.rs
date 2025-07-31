@@ -28,12 +28,12 @@ pub enum CacheCommand {
         BlockSeqNumQuery,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
-    Cas(
-        CacheKey /* Key */,
-        Vec<u8> /* Value */,
-        u64 /* Expected SeqNum */,
-        oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
-    ),
+    // Cas(
+    //     CacheKey /* Key */,
+    //     Vec<u8> /* Value */,
+    //     u64 /* Expected SeqNum */,
+    //     oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
+    // ),
     Commit
 }
 
@@ -320,9 +320,9 @@ impl CacheManager {
                     // self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key, value: CachedValue::new(value, val_hash), seq_num_query }).await;
 
                 }
-                CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
-                    unimplemented!();
-                }
+                // CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
+                //     unimplemented!();
+                // }
                 CacheCommand::Commit => {
                     // self.last_batch_time = Instant::now();
                     // self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;

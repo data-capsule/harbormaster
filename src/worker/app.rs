@@ -81,7 +81,8 @@ impl CacheConnector {
         // let __cache_tx_time = Instant::now();
         self.cache_tx.send(command).await;
         // info!("Cache tx time: {} us", __cache_tx_time.elapsed().as_micros());
-        let result = response_rx.await.unwrap()?;
+        // let result = response_rx.await.unwrap()?;
+        let result = 1;
         std::result::Result::Ok((result, rx))
         // std::result::Result::Ok((1, rx))
     }
@@ -373,7 +374,7 @@ impl KVSTask {
                 ProtoTransactionOpType::Write => {
                     let key = op.operands[0].clone();
                     let value = op.operands[1].clone();
-                    continue;
+                    // continue;
 
                     let res = self.cache_connector.dispatch_write_request(key, value).await;
                     if let std::result::Result::Err(e) = res {
