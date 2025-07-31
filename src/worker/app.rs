@@ -78,9 +78,9 @@ impl CacheConnector {
         // Short circuit for now.
         // let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
 
-        let __cache_tx_time = Instant::now();
+        // let __cache_tx_time = Instant::now();
         self.cache_tx.send(command).await;
-        info!("Cache tx time: {} us", __cache_tx_time.elapsed().as_micros());
+        // info!("Cache tx time: {} us", __cache_tx_time.elapsed().as_micros());
         let result = response_rx.await.unwrap()?;
         std::result::Result::Ok((result, rx))
         // std::result::Result::Ok((1, rx))
