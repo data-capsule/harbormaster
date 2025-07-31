@@ -372,7 +372,7 @@ impl KVSTask {
                 ProtoTransactionOpType::Write => {
                     let key = op.operands[0].clone();
                     let value = op.operands[1].clone();
-                    // continue;
+                    continue;
 
                     let res = self.cache_connector.dispatch_write_request(key, value).await;
                     if let std::result::Result::Err(e) = res {
