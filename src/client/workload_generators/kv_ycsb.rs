@@ -1,5 +1,6 @@
 use std::{process::exit, time::Instant};
 
+use crossbeam::thread;
 use log::info;
 use num_bigint::{BigInt, Sign};
 use rand::distributions::{Uniform, WeightedIndex};
@@ -60,7 +61,7 @@ pub struct KVReadWriteYCSBGenerator {
 
 impl KVReadWriteYCSBGenerator {
     pub fn new(config: &KVReadWriteYCSB, client_idx: usize, total_clients: usize) -> KVReadWriteYCSBGenerator {
-        let rng = ChaCha20Rng::from_entropy();
+        let rng = ChaCha20Rng::from_rng(thread_rng()).unwrap();
 
         let read_write_weights = [
             (TxOpType::Read, (config.read_ratio * 1000.0) as i32),
@@ -123,7 +124,7 @@ impl KVReadWriteYCSBGenerator {
 
     fn get_next_val(&mut self) -> Vec<u8> {
         let mut payload = vec![0u8; self.config.val_size];
-        self.rng.fill(&mut payload[..]);
+        // self.rng.fill(&mut payload[..]);
         payload
     }
 

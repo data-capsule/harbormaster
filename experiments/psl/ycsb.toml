@@ -40,8 +40,8 @@ batch_max_delay_ms = 2
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
 num_crypto_workers = 10
-num_worker_threads_per_worker = 1
-num_replier_threads_per_worker = 20
+num_worker_threads_per_worker = 30
+num_replier_threads_per_worker = 30
 
 
 [node_config.app_config]
@@ -62,12 +62,12 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 5
+max_concurrent_requests = 10
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 100_000
 num_fields = 1
-val_size = 1024 # 8 KiB
+val_size = 100 # 8 KiB
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -77,16 +77,16 @@ read_ratio = 0.0
 [[experiments]]
 name = "ycsb"
 type = "psl_storage"
-git_hash = "694c82510d7abdb303363f5f66643697f1d28093"
+git_hash = "30d0eb4fd44087d900748a581dbca1805f130c09"
 repeats = 1
-num_clients = 80
+num_clients = 160
 num_storage_nodes = 0
 num_sequencer_nodes = 0
 node_distribution = "uniform"
 storage_distribution = "uniform"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
-duration = 90
+duration = 180
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]

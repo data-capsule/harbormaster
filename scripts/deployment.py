@@ -346,6 +346,10 @@ class Deployment:
 
             self.nodelist.append(Node(name, public_ip, private_ip, tee_type, region_id, is_client, is_coordinator, tag))
 
+            if is_client:
+                for j in range(3):
+                    self.nodelist.append(Node(f"{name}-replica{j}", public_ip, private_ip, tee_type, region_id, is_client, is_coordinator, tag))
+
             if dev_vm:
                 self.dev_vm = self.nodelist[-1]
         
