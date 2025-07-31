@@ -12,7 +12,7 @@ use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_prop
 use super::cache_manager::{CacheCommand, CacheError};
 
 pub struct CacheConnector {
-    cache_tx: UnboundedSender<CacheCommand>,
+    cache_tx: flume::Sender<CacheCommand>,
 }
 
 // const NUM_WORKER_THREADS: usize = 4;
@@ -43,7 +43,7 @@ impl FutureSeqNum {
 }
 
 impl CacheConnector {
-    pub fn new(cache_tx: UnboundedSender<CacheCommand>) -> Self {
+    pub fn new(cache_tx: flume::Sender<CacheCommand>) -> Self {
         Self { cache_tx }
     }
 
@@ -100,7 +100,7 @@ impl CacheConnector {
 pub type UncommittedResultSet = (Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, Option<u64> /* Some(potential seq_num; wait till committed) | None(reply immediately) */);
 
 pub trait ClientHandlerTask {
-    fn new(cache_tx: UnboundedSender<CacheCommand>, id: usize) -> Self;
+    fn new(cache_tx: flume::Sender<CacheCommand>, id: usize) -> Self;
     fn get_cache_connector(&self) -> &CacheConnector;
     fn get_id(&self) -> usize;
     fn get_total_work(&self) -> usize; // Useful for throghput calculation.
@@ -109,7 +109,7 @@ pub trait ClientHandlerTask {
 
 pub struct PSLAppEngine<T: ClientHandlerTask> {
     config: AtomicPSLWorkerConfig,
-    cache_tx: UnboundedSender<CacheCommand>,
+    cache_tx: flume::Sender<CacheCommand>,
     client_command_rx: async_channel::Receiver<TxWithAckChanTag>,
     commit_rx: UnboundedReceiver<u64>,
     handles: JoinSet<()>,
@@ -120,7 +120,7 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
 }
 
 impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
-    pub fn new(config: AtomicPSLWorkerConfig, cache_tx: UnboundedSender<CacheCommand>, client_command_rx: async_channel::Receiver<TxWithAckChanTag>, commit_rx: UnboundedReceiver<u64>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, cache_tx: flume::Sender<CacheCommand>, client_command_rx: async_channel::Receiver<TxWithAckChanTag>, commit_rx: UnboundedReceiver<u64>) -> Self {
         Self {
             config,
             cache_tx,
@@ -283,7 +283,7 @@ pub struct KVSTask {
 }
 
 impl ClientHandlerTask for KVSTask {
-    fn new(cache_tx: UnboundedSender<CacheCommand>, id: usize) -> Self {
+    fn new(cache_tx: flume::Sender<CacheCommand>, id: usize) -> Self {
         Self {
             cache_connector: CacheConnector::new(cache_tx),
             id,

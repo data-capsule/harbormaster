@@ -176,7 +176,7 @@ pub type CacheKey = Vec<u8>;
 
 pub struct CacheManager {
     config: AtomicPSLWorkerConfig,
-    command_rx: UnboundedReceiver<CacheCommand>,
+    command_rx: flume::Receiver<CacheCommand>,
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
     block_sequencer_tx: Sender<SequencerCommand>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
@@ -192,7 +192,7 @@ pub struct CacheManager {
 impl CacheManager {
     pub fn new(
         config: AtomicPSLWorkerConfig,
-        command_rx: UnboundedReceiver<CacheCommand>,
+        command_rx: flume::Receiver<CacheCommand>,
         block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
         block_sequencer_tx: Sender<SequencerCommand>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
@@ -226,35 +226,38 @@ impl CacheManager {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
-        let _chan_depth = self.config.get().rpc_config.channel_depth as usize;
-        let mut commands_vec = Vec::with_capacity(self.command_rx.len());
+        // let _chan_depth = self.config.get().rpc_config.channel_depth as usize;
+        // let mut commands_vec = Vec::with_capacity(self.command_rx.len());
+
+        let commands = self.command_rx.drain().collect::<Vec<_>>();
+        self.handle_command(commands).await;
         
-        tokio::select! {
-            biased;
-            _ = self.command_rx.recv_many(&mut commands_vec, self.command_rx.len()) => {
-                self.handle_command(commands_vec).await;
-            }
-            Some((block_rx, sender)) = self.block_rx.recv() => {
-                let block = block_rx.await.expect("Block rx error");
-                if let Ok(block) = block {
-                    self.handle_block(sender, block).await;
-                } else {
-                    warn!("Failed to get block from block_rx");
-                }
-            }
-            // _ = self.batch_timer.wait() => {
+        // tokio::select! {
+        //     biased;
+        //     _ = self.command_rx.recv_many(&mut commands_vec, self.command_rx.len()) => {
+        //         self.handle_command(commands_vec).await;
+        //     }
+        //     Some((block_rx, sender)) = self.block_rx.recv() => {
+        //         let block = block_rx.await.expect("Block rx error");
+        //         if let Ok(block) = block {
+        //             self.handle_block(sender, block).await;
+        //         } else {
+        //             warn!("Failed to get block from block_rx");
+        //         }
+        //     }
+        //     // _ = self.batch_timer.wait() => {
 
-            //     // This is safe to do here.
-            //     // The tick won't interrupt handle_command or handle_block's logic.
+        //     //     // This is safe to do here.
+        //     //     // The tick won't interrupt handle_command or handle_block's logic.
 
-            //     debug!("Force making new block");
-            //     self.block_sequencer_tx.send(SequencerCommand::ForceMakeNewBlock).await;
-            //     // }
-            // }
-            // _ = self.log_timer.wait() => {
-            //     self.log_stats().await;
-            // }
-        }
+        //     //     debug!("Force making new block");
+        //     //     self.block_sequencer_tx.send(SequencerCommand::ForceMakeNewBlock).await;
+        //     //     // }
+        //     // }
+        //     // _ = self.log_timer.wait() => {
+        //     //     self.log_stats().await;
+        //     // }
+        // }
         Ok(())
     }
 
