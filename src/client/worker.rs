@@ -424,7 +424,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
                     let __queue_start = Instant::now();
                     generator_tx.send(req.get_checker_task()).await.unwrap();
-                    info!("Queue latency: {} us", __queue_start.elapsed().as_micros());
+                    debug!("Queue latency: {} us", __queue_start.elapsed().as_micros());
                     outstanding_requests.insert(req.id, req);
                     total_requests += 1;
                 },
@@ -519,7 +519,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                         MessageRef(&buf, buf.len(), &crate::rpc::SenderType::Anon),
                     ).await;
 
-                    info!("Send latency: {} us", __send_start.elapsed().as_micros());
+                    debug!("Send latency: {} us", __send_start.elapsed().as_micros());
 
                     res
                 },
