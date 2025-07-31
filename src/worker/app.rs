@@ -69,12 +69,12 @@ impl CacheConnector {
     ) -> anyhow::Result<(u64 /* lamport ts */, tokio::sync::oneshot::Receiver<u64 /* block seq num */>), CacheError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        // let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
+        let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
 
         // TODO: Use the actual hash.
-        let val_hash = BigInt::from(1);
-        // let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
-        let command = CacheCommand::Put(key, vec![], val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
+        // let val_hash = BigInt::from(1);
+        let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
+        // let command = CacheCommand::Put(key, vec![], val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
         
         // Short circuit for now.
         // let command = CacheCommand::Put(key, value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
@@ -82,8 +82,8 @@ impl CacheConnector {
         // let __cache_tx_time = Instant::now();
         self.cache_tx.send(command); // .await;
         // info!("Cache tx time: {} us", __cache_tx_time.elapsed().as_micros());
-        // let result = response_rx.await.unwrap()?;
-        let result = 1;
+        let result = response_rx.await.unwrap()?;
+        // let result = 1;
         std::result::Result::Ok((result, rx))
         // std::result::Result::Ok((1, rx))
     }
@@ -91,7 +91,7 @@ impl CacheConnector {
     pub async fn dispatch_commit_request(&self) {
         let command = CacheCommand::Commit;
 
-        // self.cache_tx.send(command).await;
+        self.cache_tx.send(command); // .await;
     }
 }
 
