@@ -40,7 +40,7 @@ mod block_broadcaster;
 mod block_sequencer;
 // mod cache_manager;
 mod staging;
-mod cache;
+pub mod cache;
 
 use staging::Staging;
 

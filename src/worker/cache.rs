@@ -1,5 +1,7 @@
+use core::num;
 use std::sync::RwLock;
 
+use dashmap::DashMap;
 use hashbrown::HashMap;
 use num_bigint::{BigInt, Sign};
 
@@ -99,34 +101,49 @@ impl CachedValue {
 }
 
 pub struct Cache {
-    cache: RwLock<HashMap<CacheKey, CachedValue>>,
+    // cache: RwLock<HashMap<CacheKey, CachedValue>>,
+    cache: DashMap<CacheKey, CachedValue>,
 }
 
 impl Cache {
     pub fn new() -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            // cache: RwLock::new(HashMap::new()),
+            cache: DashMap::new(),
+        }
+    }
+
+    pub fn new_with_shards(num_shards: usize) -> Self {
+        let num_shards = (num_shards as f32).log2().ceil() as usize;
+        let num_shards = 1 << num_shards;    
+        Self {
+            cache: DashMap::with_capacity_and_shard_amount(1000, num_shards),
         }
     }
 
     pub fn get(&self, key: &CacheKey) -> Option<CachedValue> {
-        self.cache.read().unwrap().get(key).cloned()
+        // self.cache.read().unwrap().get(key).cloned()
+        self.cache.get(key).map(|v| v.clone())
     }
 
     pub fn put(&self, key: CacheKey, value: CachedValue) {
-        self.cache.write().unwrap()
-            .entry(key)
-            .and_modify(|v| {
-                v.merge_cached(&value).unwrap();
-            })
-            .or_insert(value);
+        // self.cache.write().unwrap()
+        //     .entry(key)
+        //     .and_modify(|v| {
+        //         v.merge_cached(&value).unwrap();
+        //     })
+        //     .or_insert(value);
+        self.cache.entry(key).and_modify(|v| {
+            v.merge_cached(&value).unwrap();
+        }).or_insert(value);
     }
 
     pub fn put_raw(&self, key: CacheKey, value: Vec<u8>) {
         
         let n = {
-            let cache = self.cache.read().unwrap();
-            let n = cache.get(&key).map(|v| v.seq_num).unwrap_or(0);
+            // let cache = self.cache.read().unwrap();
+            // let n = cache.get(&key).map(|v| v.seq_num).unwrap_or(0);
+            let n = self.cache.get(&key).map(|v| v.seq_num).unwrap_or(0);
             n
         };
         
@@ -134,20 +151,28 @@ impl Cache {
         let val = CachedValue::new_with_seq_num(value, n + 1);
 
         {
-            let mut cache = self.cache.write().unwrap();
-            cache.insert(key, val);
+            // let mut cache = self.cache.write().unwrap();
+            // cache.insert(key, val);
+
+            self.cache.insert(key, val);
         }
 
     }
 
     pub fn bulk_put(&self, key_value_pairs: Vec<(CacheKey, CachedValue)>) {
-        let mut cache = self.cache.write().unwrap();
+        // let mut cache = self.cache.write().unwrap();
+        // for (key, value) in key_value_pairs {
+        //     cache.entry(key)
+        //         .and_modify(|v| {
+        //             v.merge_cached(&value).unwrap();
+        //         })
+        //         .or_insert(value);
+        // }
+
         for (key, value) in key_value_pairs {
-            cache.entry(key)
-                .and_modify(|v| {
-                    v.merge_cached(&value).unwrap();
-                })
-                .or_insert(value);
+            self.cache.entry(key).and_modify(|v| {
+                v.merge_cached(&value).unwrap();
+            }).or_insert(value);
         }
     }
 

@@ -320,8 +320,8 @@ impl KVSTask {
                     // continue;
 
                     // let __put_time = Instant::now();
-                    // self.cache.put_raw(key, value);
-                    self.local_cache.insert(key, CachedValue::new(value));
+                    self.cache.put_raw(key, value);
+                    // self.local_cache.insert(key, CachedValue::new(value));
                     // debug!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
 
                     // let res = self.cache_connector.dispatch_write_request(key, value).await;
