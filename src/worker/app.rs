@@ -7,7 +7,7 @@ use num_bigint::{BigInt, Sign};
 use prost::{DecodeError, Message as _};
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer, AtomicStruct}, worker::{block_sequencer::BlockSeqNumQuery, cache::Cache}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{self, client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer, AtomicStruct}, worker::{block_sequencer::BlockSeqNumQuery, cache::Cache}};
 
 
 
@@ -307,20 +307,19 @@ impl KVSTask {
 
         for mut op in ops {
             // continue;
-            let op_type = op.op_type;
-
+            let op_type = op.op_type();
             match op_type {
-                2 => {
-                    let value = op.operands.pop().unwrap();
-                    let key = op.operands.pop().unwrap();
+                ProtoTransactionOpType::Write => {
+                    // let value = op.operands.pop().unwrap();
+                    // let key = op.operands.pop().unwrap();
 
-                    let key_len = key.len();
-                    let value_len = value.len();
+                    // let key_len = key.len();
+                    // let value_len = value.len();
                     // continue;
 
-                    let __put_time = Instant::now();
-                    self.cache.put_raw(key, value).await;
-                    debug!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
+                    // let __put_time = Instant::now();
+                    self.cache.put_raw(vec![], vec![]).await;
+                    // debug!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
 
                     // let res = self.cache_connector.dispatch_write_request(key, value).await;
                     // if let std::result::Result::Err(e) = res {
@@ -334,7 +333,7 @@ impl KVSTask {
                         values: vec![],
                     });
                 },
-                1 => {
+                ProtoTransactionOpType::Read => {
                     continue;
                     let key = op.operands.pop().unwrap();
                     match self.cache.get(&key).await {
