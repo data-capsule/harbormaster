@@ -7,7 +7,7 @@ use num_bigint::{BigInt, Sign};
 use prost::{DecodeError, Message as _};
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{self, client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer, AtomicStruct}, worker::{block_sequencer::BlockSeqNumQuery, cache::Cache}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, HashType}, proto::{self, client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer, AtomicStruct}, worker::{block_sequencer::BlockSeqNumQuery, cache::{Cache, CacheKey, CachedValue}}};
 
 
 
@@ -220,6 +220,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
 pub struct KVSTask {
     cache: Arc<Cache>,
+    local_cache: HashMap<CacheKey, CachedValue>,
     id: usize,
     total_work: usize,
 }
@@ -228,6 +229,7 @@ impl ClientHandlerTask for KVSTask {
     fn new(cache: Arc<Cache>, id: usize) -> Self {
         Self {
             cache,
+            local_cache: HashMap::new(),
             id,
             total_work: 0,
         }
@@ -283,7 +285,7 @@ impl ClientHandlerTask for KVSTask {
 impl KVSTask {
 
     #[allow(unreachable_code)]
-    async fn execute_ops(&self, ops: Vec<ProtoTransactionOp>) -> Result<(Vec<ProtoTransactionOpResult>, Option<u64>), anyhow::Error> {
+    async fn execute_ops(&mut self, ops: Vec<ProtoTransactionOp>) -> Result<(Vec<ProtoTransactionOpResult>, Option<u64>), anyhow::Error> {
         let mut atleast_one_write = false;
         let mut last_write_index = 0;
         let mut highest_committed_block_seq_num_needed = 0;
@@ -318,7 +320,8 @@ impl KVSTask {
                     // continue;
 
                     // let __put_time = Instant::now();
-                    self.cache.put_raw(key, value);
+                    // self.cache.put_raw(key, value);
+                    self.local_cache.insert(key, CachedValue::new(value));
                     // debug!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
 
                     // let res = self.cache_connector.dispatch_write_request(key, value).await;
