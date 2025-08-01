@@ -398,32 +398,32 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         //     let _ = CacheManager::run(cache_manager).await;
         // });
 
-        handles.spawn(async move {
-            let _ = BlockSequencer::run(block_sequencer).await;
-        });
+        // handles.spawn(async move {
+        //     let _ = BlockSequencer::run(block_sequencer).await;
+        // });
 
-        handles.spawn(async move {
-            let _ = LogServer::run(logserver).await;
-        });
-        handles.spawn(async move {
-            let _ = crate::storage_server::fork_receiver::ForkReceiver::run(fork_receiver).await;
-        });
-        handles.spawn(async move {
-            let _ = Staging::run(staging).await;
-        });
-        handles.spawn(async move {
-            let _ = BlockBroadcaster::run(block_broadcaster_to_storage).await;
-        });
-        handles.spawn(async move {
-            let _ = BlockBroadcaster::run(block_broadcaster_to_other_workers).await;
-        });
+        // handles.spawn(async move {
+        //     let _ = LogServer::run(logserver).await;
+        // });
+        // handles.spawn(async move {
+        //     let _ = crate::storage_server::fork_receiver::ForkReceiver::run(fork_receiver).await;
+        // });
+        // handles.spawn(async move {
+        //     let _ = Staging::run(staging).await;
+        // });
+        // handles.spawn(async move {
+        //     let _ = BlockBroadcaster::run(block_broadcaster_to_storage).await;
+        // });
+        // handles.spawn(async move {
+        //     let _ = BlockBroadcaster::run(block_broadcaster_to_other_workers).await;
+        // });
         handles.spawn(async move {
             let _ = PSLAppEngine::run(app).await;
         });
-        handles.spawn(async move {
-            let mut __black_hole_storage = __black_hole_storage.lock().await;
-            __black_hole_storage.run().await;
-        });
+        // handles.spawn(async move {
+        //     let mut __black_hole_storage = __black_hole_storage.lock().await;
+        //     __black_hole_storage.run().await;
+        // });
 
         handles
     }
