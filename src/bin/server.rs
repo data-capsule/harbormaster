@@ -6,6 +6,7 @@ use psl::config::{self, Config, PSLWorkerConfig};
 use psl::{consensus, storage_server, worker};
 use tokio::{runtime, signal};
 use std::process::exit;
+use std::time::Duration;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use psl::consensus::engines::kvs::KVSAppEngine;
 use std::io::Write;
@@ -214,6 +215,20 @@ async fn main() {
 
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
+
+    let handle = tokio::runtime::Handle::current();
+    let runtime_monitor = tokio_metrics::RuntimeMonitor::new(&handle);
+
+    {
+        tokio::spawn(async move {
+            for interval in runtime_monitor.intervals() {
+                // pretty-print the metric interval
+                info!("{:?}", interval);
+                // wait 500ms
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+        });
+    }
 
     run_main(run_mode).await.unwrap();
 }
