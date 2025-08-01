@@ -2,7 +2,7 @@ use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, s
 
 use anyhow::Ok;
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use num_bigint::{BigInt, Sign};
 use prost::{DecodeError, Message as _};
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
@@ -101,7 +101,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
     async fn client_reply_handler(mut reply_processor_rx: Receiver<Vec<((Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64), Instant)>>) {
         while let Some(results) = reply_processor_rx.recv().await {
             for ((result, ack_chan, seq_num), start_time) in results {
-                info!("Reply latency: {} us", start_time.elapsed().as_micros());
+                debug!("Reply latency: {} us", start_time.elapsed().as_micros());
                 Self::send_reply(result, ack_chan, seq_num).await;
             }
         }
@@ -178,6 +178,17 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
             let msgs_pending_reply_vec = reply_rx.len().max(100);
 
             tokio::select! {
+                biased;
+                _ = reply_rx.recv_many(&mut reply_vec, msgs_pending_reply_vec) => {
+                    for (result, ack_chan, seq_num) in reply_vec.drain(..) {
+                        let seq_num = seq_num.unwrap_or(0);
+                        app.pending_replies.entry(seq_num)
+                            .or_insert(Vec::new())
+                            .push(((result, ack_chan, seq_num), Instant::now()));
+                    }
+
+                    app.forward_replies(known_ci, &reply_tx_vec).await;
+                }
                 _ = app.commit_rx.recv_many(&mut ci_vec, msgs_pending_ci_vec) => {
                     let max_ci = ci_vec.iter().max().unwrap_or(&0);
 
@@ -189,16 +200,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
 
                 },
-                _ = reply_rx.recv_many(&mut reply_vec, msgs_pending_reply_vec) => {
-                    for (result, ack_chan, seq_num) in reply_vec.drain(..) {
-                        let seq_num = seq_num.unwrap_or(0);
-                        app.pending_replies.entry(seq_num)
-                            .or_insert(Vec::new())
-                            .push(((result, ack_chan, seq_num), Instant::now()));
-                    }
-
-                    app.forward_replies(known_ci, &reply_tx_vec).await;
-                }
+                
                 // _ = log_timer.wait() => {
                 //     let mut total_work = 0;
                 //     for tx in &total_work_txs {
@@ -319,8 +321,8 @@ impl KVSTask {
                     // continue;
 
                     let __put_time = Instant::now();
-                    // self.cache.put_raw(key, value).await;
-                    info!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
+                    self.cache.put_raw(key, value).await;
+                    debug!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
 
                     // let res = self.cache_connector.dispatch_write_request(key, value).await;
                     // if let std::result::Result::Err(e) = res {
@@ -379,7 +381,7 @@ impl KVSTask {
     async fn reply_receipt(&self, resp: MsgAckChanWithTag, results: Vec<ProtoTransactionOpResult>, seq_num: Option<u64>, reply_handler_tx: &tokio::sync::mpsc::Sender<UncommittedResultSet>) -> anyhow::Result<()> {
         let __send_time = Instant::now();
         let _ = reply_handler_tx.send((results, resp, seq_num)).await;
-        info!("Reply receipt send time: {} us.", __send_time.elapsed().as_micros());
+        debug!("Reply receipt send time: {} us.", __send_time.elapsed().as_micros());
         Ok(())
     }
 
