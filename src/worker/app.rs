@@ -101,7 +101,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
     async fn client_reply_handler(mut reply_processor_rx: Receiver<Vec<((Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, u64), Instant)>>) {
         while let Some(results) = reply_processor_rx.recv().await {
             for ((result, ack_chan, seq_num), start_time) in results {
-                trace!("Reply latency: {} us", start_time.elapsed().as_micros());
+                info!("Reply latency: {} us", start_time.elapsed().as_micros());
                 Self::send_reply(result, ack_chan, seq_num).await;
             }
         }
@@ -377,7 +377,9 @@ impl KVSTask {
     }
 
     async fn reply_receipt(&self, resp: MsgAckChanWithTag, results: Vec<ProtoTransactionOpResult>, seq_num: Option<u64>, reply_handler_tx: &tokio::sync::mpsc::Sender<UncommittedResultSet>) -> anyhow::Result<()> {
-        reply_handler_tx.send((results, resp, seq_num)).await;
+        let __send_time = Instant::now();
+        let _ = reply_handler_tx.send((results, resp, seq_num)).await;
+        info!("Reply receipt send time: {} us.", __send_time.elapsed().as_micros());
         Ok(())
     }
 
