@@ -313,9 +313,14 @@ impl KVSTask {
                 ProtoTransactionOpType::Write => {
                     let value = op.operands.pop().unwrap();
                     let key = op.operands.pop().unwrap();
+
+                    let key_len = key.len();
+                    let value_len = value.len();
                     // continue;
 
+                    let __put_time = Instant::now();
                     self.cache.put_raw(key, value);
+                    info!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
 
                     // let res = self.cache_connector.dispatch_write_request(key, value).await;
                     // if let std::result::Result::Err(e) = res {
