@@ -318,7 +318,7 @@ impl KVSTask {
                     // continue;
 
                     // let __put_time = Instant::now();
-                    self.cache.put_raw(vec![], vec![]).await;
+                    // self.cache.put_raw(vec![], vec![]).await;
                     // debug!("Put time: {} us. Key size: {} bytes. Value size: {} bytes.", __put_time.elapsed().as_micros(), key_len, value_len);
 
                     // let res = self.cache_connector.dispatch_write_request(key, value).await;
