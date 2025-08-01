@@ -44,7 +44,7 @@ pub trait ClientHandlerTask {
     fn new(cache: Arc<Cache>, id: usize) -> Self;
     fn get_id(&self) -> usize;
     fn get_total_work(&self) -> usize; // Useful for throghput calculation.
-    fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> impl Future<Output = Result<(), anyhow::Error>> + Send + Sync;
+    fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &tokio::sync::mpsc::Sender<UncommittedResultSet>) -> impl Future<Output = Result<(), anyhow::Error>> + Send + Sync;
 }
 
 pub struct PSLAppEngine<T: ClientHandlerTask> {
@@ -126,7 +126,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
         let mut app = app.lock().await;
         let _chan_depth = app.config.get().rpc_config.channel_depth as usize;
 
-        let (reply_tx, mut reply_rx) = unbounded_channel();
+        let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(_chan_depth);
 
         let mut total_work_txs: Vec<Sender<tokio::sync::oneshot::Sender<usize>>> = Vec::new();
 
@@ -240,7 +240,7 @@ impl ClientHandlerTask for KVSTask {
     }
 
     #[allow(unreachable_code)]
-    async fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> anyhow::Result<()> {
+    async fn on_client_request(&mut self, request: TxWithAckChanTag, reply_handler_tx: &tokio::sync::mpsc::Sender<UncommittedResultSet>) -> anyhow::Result<()> {
         let req = request.0;
         let resp = request.1;
         self.total_work += 1;
@@ -376,15 +376,15 @@ impl KVSTask {
         Ok((results, None))
     }
 
-    async fn reply_receipt(&self, resp: MsgAckChanWithTag, results: Vec<ProtoTransactionOpResult>, seq_num: Option<u64>, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> anyhow::Result<()> {
-        reply_handler_tx.send((results, resp, seq_num));
+    async fn reply_receipt(&self, resp: MsgAckChanWithTag, results: Vec<ProtoTransactionOpResult>, seq_num: Option<u64>, reply_handler_tx: &tokio::sync::mpsc::Sender<UncommittedResultSet>) -> anyhow::Result<()> {
+        reply_handler_tx.send((results, resp, seq_num)).await;
         Ok(())
     }
 
-    async fn reply_invalid(&self, resp: MsgAckChanWithTag, reply_handler_tx: &UnboundedSender<UncommittedResultSet>) -> anyhow::Result<()> {
+    async fn reply_invalid(&self, resp: MsgAckChanWithTag, reply_handler_tx: &tokio::sync::mpsc::Sender<UncommittedResultSet>) -> anyhow::Result<()> {
         // For now, just send a blank result.
         
-        reply_handler_tx.send((vec![], resp, None));
+        reply_handler_tx.send((vec![], resp, None)).await;
         Ok(())
     }
 
