@@ -12,29 +12,29 @@ pub type CacheKey = Vec<u8>;
 pub struct CachedValue {
     pub value: Vec<u8>,
     pub seq_num: u64,
-    pub val_hash: BigInt,
+    // pub val_hash: BigInt,
 }
 
 impl CachedValue {
 
     /// Completely new value, with seq_num = 1
-    pub fn new(value: Vec<u8>, val_hash: BigInt) -> Self {
-        Self::new_with_seq_num(value, 1, val_hash)
+    pub fn new(value: Vec<u8>) -> Self {
+        Self::new_with_seq_num(value, 1)
     }
 
-    pub fn new_with_seq_num(value: Vec<u8>, seq_num: u64, val_hash: BigInt) -> Self {
+    pub fn new_with_seq_num(value: Vec<u8>, seq_num: u64) -> Self {
         Self {
             value,
             seq_num,
-            val_hash,
+            // val_hash,
         }
     }
 
     /// Blindly update value, incrementing seq_num
-    pub fn blind_update(&mut self, new_value: &Vec<u8>, new_val_hash: &BigInt) -> u64 {
+    pub fn blind_update(&mut self, new_value: &Vec<u8>) -> u64 {
         self.value = new_value.clone();
         self.seq_num += 1;
-        self.val_hash = new_val_hash.clone();
+        // self.val_hash = new_val_hash.clone();
 
         self.seq_num
     }
@@ -48,14 +48,18 @@ impl CachedValue {
         if new_seq_num > self.seq_num {
             self.value.copy_from_slice(&new_value);
             self.seq_num = new_seq_num;
-            self.val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&self.value));
+            // self.val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&self.value));
             return Ok(new_seq_num);
         } else if new_seq_num == self.seq_num {
             let new_hash = hash(&new_value);
             let new_hash_num = BigInt::from_bytes_be(Sign::Plus, &new_hash);
-            if new_hash_num > self.val_hash {
+
+            let old_hash = hash(&self.value);
+            let old_hash_num = BigInt::from_bytes_be(Sign::Plus, &old_hash);
+
+            if new_hash_num > old_hash_num {
                 self.value.copy_from_slice(&new_value);
-                self.val_hash = new_hash_num;
+                // self.val_hash = new_hash_num;
                 self.seq_num = new_seq_num;
                 return Ok(new_seq_num);
             }
@@ -73,12 +77,18 @@ impl CachedValue {
         if new_value.seq_num > self.seq_num {
             self.value.copy_from_slice(&new_value.value);
             self.seq_num = new_value.seq_num;
-            self.val_hash = new_value.val_hash.clone();
+            // self.val_hash = new_value.val_hash.clone();
             return Ok(self.seq_num);
         } else if new_value.seq_num == self.seq_num {
-            if new_value.val_hash > self.val_hash {
+            let new_hash = hash(&new_value.value);
+            let new_hash_num = BigInt::from_bytes_be(Sign::Plus, &new_hash);
+
+            let old_hash = hash(&self.value);
+            let old_hash_num = BigInt::from_bytes_be(Sign::Plus, &old_hash);
+
+            if new_hash_num > old_hash_num {
                 self.value.copy_from_slice(&new_value.value);
-                self.val_hash = new_value.val_hash.clone();
+                // self.val_hash = new_value.val_hash.clone();
                 self.seq_num = new_value.seq_num;
                 return Ok(self.seq_num);
             }
@@ -120,13 +130,13 @@ impl Cache {
             n
         };
         
-        let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
-        let val = CachedValue::new_with_seq_num(value, n + 1, val_hash);
+        // let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
+        let val = CachedValue::new_with_seq_num(value, n + 1);
 
-        // {
-        //     let mut cache = self.cache.write().await;
-        //     cache.insert(key, val);
-        // }
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(key, val);
+        }
 
     }
 
