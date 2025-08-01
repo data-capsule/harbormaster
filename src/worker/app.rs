@@ -225,9 +225,9 @@ pub struct KVSTask {
 }
 
 impl ClientHandlerTask for KVSTask {
-    fn new(cache: Arc<Cache>, id: usize) -> Self {
+    fn new(_cache: Arc<Cache>, id: usize) -> Self {
         Self {
-            cache,
+            cache: Arc::new(Cache::new()),
             id,
             total_work: 0,
         }
