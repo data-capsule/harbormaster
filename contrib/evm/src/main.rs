@@ -5,6 +5,8 @@ use log::{debug, error, info};
 use psl::config::{self, Config, PSLWorkerConfig};
 use psl::{consensus, storage_server, worker};
 use revm::context::ContextTr;
+use revm::database::async_db::DatabaseAsyncRef;
+use revm::database::WrapDatabaseAsync;
 use revm::handler::EvmTr;
 use revm::primitives::ruint::Uint;
 use revm::primitives::{address, Address};
@@ -186,16 +188,20 @@ fn main() {
     let rx = state.init();
     runtime.spawn(PslKvDb::run(rx));
 
-    state.insert_account_info(address!("0xcafebabecafebabecafebabecafebabecafebabe"), AccountInfo::from_balance(Uint::<256, 4>::from(1000000000000000000000000u128)));
-    state.insert_account_info(address!("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"), AccountInfo::from_balance(Uint::<256, 4>::from(0u64)));
+    let _ = runtime.block_on(run_evm(state));
+}
+
+
+async fn run_evm(mut state: PslKvDb) {
+    state.insert_account_info(address!("0xcafebabecafebabecafebabecafebabecafebabe"), AccountInfo::from_balance(Uint::<256, 4>::from(1000000000000000000000000u128))).await;
+    state.insert_account_info(address!("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"), AccountInfo::from_balance(Uint::<256, 4>::from(0u64))).await;
 
 
     {
-        let account1 = state.load_account(address!("0xcafebabecafebabecafebabecafebabecafebabe")).unwrap();
+        let account1 = state.load_account(address!("0xcafebabecafebabecafebabecafebabecafebabe")).await.unwrap();
         info!("Account 1: {:?}", account1.info.balance);
     }
 
-    
     let mut my_evm = evm::PslEvm::new(Context::mainnet().with_db(state), ());
     
     let tx = TxEnv::builder()
@@ -210,9 +216,9 @@ fn main() {
     let ctx = my_evm.ctx();
     let state = ctx.db();
 
-    let account2 = state.load_account(address!("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
+    let account2 = state.load_account(address!("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")).await.unwrap();
     info!("Account 2: {:?}", account2.info.balance);
 
-    let account1 = state.load_account(address!("0xcafebabecafebabecafebabecafebabecafebabe")).unwrap();
+    let account1 = state.load_account(address!("0xcafebabecafebabecafebabecafebabecafebabe")).await.unwrap();
     info!("Account 1: {:?}", account1.info.balance);
 }

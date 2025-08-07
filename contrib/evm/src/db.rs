@@ -1,9 +1,11 @@
 use core::convert::Infallible;
+use std::future::Future;
 use num_bigint::BigInt;
 use psl::utils::channel::{make_channel, Receiver, Sender};
 use psl::worker::block_sequencer::BlockSeqNumQuery;
 use psl::worker::cache_manager::{CacheCommand, CacheKey};
-use revm::database_interface::{
+use revm::database::WrapDatabaseAsync;
+use revm::database_interface::{async_db::{DatabaseAsync, DatabaseAsyncRef},
     Database, DatabaseCommit, DatabaseRef, EmptyDB, BENCH_CALLER, BENCH_CALLER_BALANCE,
     BENCH_TARGET, BENCH_TARGET_BALANCE,
 };
@@ -53,72 +55,72 @@ impl PslKvDb {
         }
     }
 
-    fn get_key(&self, key: CacheKey) -> Result<Vec<u8>, Infallible> {
+    async fn get_key(&self, key: CacheKey) -> Result<Vec<u8>, Infallible> {
         let (tx, rx) = oneshot::channel();
         
         self.db_chan.as_ref().unwrap().send(CacheCommand::Get(key, tx)).unwrap();
-        let res = rx.blocking_recv().unwrap().unwrap();
+        let res = rx.await.unwrap().unwrap();
         Ok(res.0)
     }
 
-    fn put_key(&self, key: CacheKey, value: Vec<u8>) -> Result<(), Infallible> {
+    async fn put_key(&self, key: CacheKey, value: Vec<u8>) -> Result<(), Infallible> {
         let (tx, rx) = oneshot::channel();
         self.db_chan.as_ref().unwrap().send(CacheCommand::Put(key, value, BigInt::from(0), BlockSeqNumQuery::DontBother, tx)).unwrap();
-        let _ = rx.blocking_recv().unwrap().unwrap();
+        let _ = rx.await.unwrap().unwrap();
         Ok(())
     }
 
-    fn get_account(&self, address: Address) -> Result<DbAccount, Infallible> {
+    async fn get_account(&self, address: Address) -> Result<DbAccount, Infallible> {
         let key = format!("account:{}", address);
-        let serialized_account = self.get_key(key.as_bytes().to_vec())?;
+        let serialized_account = self.get_key(key.as_bytes().to_vec()).await?;
         let account = serde_json::from_slice(&serialized_account)
             .unwrap_or_else(|_| DbAccount::default());
         Ok(account)
     }    
 
-    fn put_account(&self, address: Address, account: DbAccount) -> Result<(), Infallible> {
+    async fn put_account(&self, address: Address, account: DbAccount) -> Result<(), Infallible> {
         let key = format!("account:{}", address);
         let serialized_account = serde_json::to_vec(&account).unwrap();
-        self.put_key(key.as_bytes().to_vec(), serialized_account)
+        self.put_key(key.as_bytes().to_vec(), serialized_account).await
     }
 
-    fn get_contract(&self, code_hash: B256) -> Result<Bytecode, Infallible> {
+    async fn get_contract(&self, code_hash: B256) -> Result<Bytecode, Infallible> {
         let key = format!("contract:{}", code_hash);
-        let serialized_contract = self.get_key(key.as_bytes().to_vec())?;
+        let serialized_contract = self.get_key(key.as_bytes().to_vec()).await?;
         let contract = serde_json::from_slice(&serialized_contract)
             .unwrap_or_else(|_| Bytecode::default());
         Ok(contract)
     }
 
-    fn put_contract(&self, code_hash: B256, contract: Bytecode) -> Result<(), Infallible> {
+    async fn put_contract(&self, code_hash: B256, contract: Bytecode) -> Result<(), Infallible> {
         let key = format!("contract:{}", code_hash);
         let serialized_contract = serde_json::to_vec(&contract).unwrap();
-        self.put_key(key.as_bytes().to_vec(), serialized_contract)
+        self.put_key(key.as_bytes().to_vec(), serialized_contract).await
     }
 
-    fn get_block_hash(&self, number: u64) -> Result<B256, Infallible> {
+    async fn get_block_hash(&self, number: u64) -> Result<B256, Infallible> {
         let key = format!("block_hash:{}", number);
-        let serialized_block_hash = self.get_key(key.as_bytes().to_vec())?;
+        let serialized_block_hash = self.get_key(key.as_bytes().to_vec()).await?;
         let block_hash = serde_json::from_slice(&serialized_block_hash)
             .unwrap_or_else(|_| B256::default());
         Ok(block_hash)
     }
 
-    fn put_block_hash(&self, number: u64, block_hash: B256) -> Result<(), Infallible> {
+    async fn put_block_hash(&self, number: u64, block_hash: B256) -> Result<(), Infallible> {
         let key = format!("block_hash:{}", number);
         let serialized_block_hash = serde_json::to_vec(&block_hash).unwrap();
-        self.put_key(key.as_bytes().to_vec(), serialized_block_hash)
+        self.put_key(key.as_bytes().to_vec(), serialized_block_hash).await
     }
 
 
     // Must call put_account with the DbAccount after this.
-    pub fn insert_contract(&mut self, account: &mut AccountInfo) {
+    pub async fn insert_contract(&mut self, account: &mut AccountInfo) {
         if let Some(code) = &account.code {
             if !code.is_empty() {
                 if account.code_hash == KECCAK_EMPTY {
                     account.code_hash = code.hash_slow();
                 }
-                self.put_contract(account.code_hash, code.clone()).unwrap();
+                self.put_contract(account.code_hash, code.clone()).await.unwrap();
             }
         }
         if account.code_hash.is_zero() {
@@ -126,16 +128,16 @@ impl PslKvDb {
         }
     }
 
-    pub fn insert_account_info(&mut self, address: Address, account: AccountInfo) {
+    pub async fn insert_account_info(&mut self, address: Address, account: AccountInfo) {
         self.put_account(address, DbAccount {
             info: account,
             account_state: AccountState::None,
             storage: HashMap::new(),
-        }).unwrap();
+        }).await.unwrap();
     }
 
-    pub fn load_account(&self, address: Address) -> Result<DbAccount, Infallible> {
-        self.get_account(address)
+    pub async fn load_account(&self, address: Address) -> Result<DbAccount, Infallible> {
+        self.get_account(address).await
     }
 
 }
@@ -321,24 +323,37 @@ impl PslKvDb {
 //     }
 // }
 
+struct HandleMod(tokio::runtime::Handle);
+
+impl HandleMod {
+    pub fn block_on<F>(&self, f: F) -> F::Output
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        tokio::task::block_in_place(move || self.0.block_on(f))
+    }
+}
+
 impl DatabaseCommit for PslKvDb {
     fn commit(&mut self, changes: HashMap<Address, Account>) {
+        let rt = HandleMod(tokio::runtime::Handle::current());
         for (address, mut account) in changes {
             if !account.is_touched() {
                 continue;
             }
             if account.is_selfdestructed() {
-                let mut db_account = self.get_account(address).unwrap();
+                let mut db_account = rt.block_on(self.get_account(address)).unwrap();
                 db_account.storage.clear();
                 db_account.account_state = AccountState::NotExisting;
                 db_account.info = AccountInfo::default();
-                self.put_account(address, db_account).unwrap();
+                rt.block_on(self.put_account(address, db_account)).unwrap();
                 continue;
             }
             let is_newly_created = account.is_created();
-            self.insert_contract(&mut account.info);
+            rt.block_on(self.insert_contract(&mut account.info));
 
-            let mut db_account = self.get_account(address).unwrap();
+            let mut db_account = rt.block_on(self.get_account(address)).unwrap();
             db_account.info = account.info;
 
             db_account.account_state = if is_newly_created {
@@ -356,64 +371,65 @@ impl DatabaseCommit for PslKvDb {
                     .into_iter()
                     .map(|(key, value)| (key, value.present_value())),
             );
-            self.put_account(address, db_account).unwrap();
+            rt.block_on(self.put_account(address, db_account)).unwrap();
         }
     }
 }
 
-impl Database for PslKvDb {
+impl DatabaseAsync for PslKvDb {
+// impl Database for PslKvDb {
     type Error = Infallible;
 
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        let basic = self.get_account(address).unwrap();
+    async fn basic_async(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        let basic = self.get_account(address).await.unwrap();
         Ok(basic.info())
     }
 
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        let contract = self.get_contract(code_hash).unwrap();
+    async fn code_by_hash_async(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        let contract = self.get_contract(code_hash).await.unwrap();
         Ok(contract)
     }
 
     /// Get the value in an account's storage slot.
     ///
     /// It is assumed that account is already loaded.
-    fn storage(
+    async fn storage_async(
         &mut self,
         address: Address,
         index: StorageKey,
     ) -> Result<StorageValue, Self::Error> {
-        let mut acc_entry = self.get_account(address).unwrap();
+        let mut acc_entry = self.get_account(address).await.unwrap();
         match acc_entry.storage.entry(index) {
             Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(_) => Ok(StorageValue::ZERO)
         }
     }
 
-    fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
-        let block_hash = self.get_block_hash(number).unwrap();
+    async fn block_hash_async(&mut self, number: u64) -> Result<B256, Self::Error> {
+        let block_hash = self.get_block_hash(number).await.unwrap();
         Ok(block_hash)
     }
 }
 
-impl DatabaseRef for PslKvDb {
+impl DatabaseAsyncRef for PslKvDb {
     type Error = Infallible;
 
-    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        let account = self.get_account(address).unwrap();
+    async fn basic_async_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        let account = self.get_account(address).await.unwrap();
         Ok(account.info())
     }
 
-    fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        let contract = self.get_contract(code_hash).unwrap();
+    async fn code_by_hash_async_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        let contract = self.get_contract(code_hash).await.unwrap();
         Ok(contract)
     }
 
-    fn storage_ref(
+    async fn storage_async_ref(
         &self,
         address: Address,
         index: StorageKey,
     ) -> Result<StorageValue, Self::Error> {
-        let account = self.get_account(address).unwrap();
+        let account = self.get_account(address).await.unwrap();
         match account.storage.get(&index) {
             Some(entry) => Ok(*entry),
             None => {
@@ -422,8 +438,71 @@ impl DatabaseRef for PslKvDb {
         }
     }
 
-    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        let block_hash = self.get_block_hash(number).unwrap();
+    async fn block_hash_async_ref(&self, number: u64) -> Result<B256, Self::Error> {
+        let block_hash = self.get_block_hash(number).await.unwrap();
+        Ok(block_hash)
+    }
+}
+
+impl Database for PslKvDb {
+    type Error = Infallible;
+
+    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let basic = rt.block_on(self.get_account(address)).unwrap();
+        Ok(basic.info())
+    }
+    
+    #[doc = " Gets account code by its hash."]
+    fn code_by_hash(&mut self,code_hash:B256) -> Result<Bytecode,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let contract = rt.block_on(self.get_contract(code_hash)).unwrap();
+        Ok(contract)
+    }
+    
+    #[doc = " Gets storage value of address at index."]
+    fn storage(&mut self,address:Address,index:StorageKey) -> Result<StorageValue,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let storage = rt.block_on(self.storage_async(address, index)).unwrap();
+        Ok(storage)
+    }
+    
+    #[doc = " Gets block hash by block number."]
+    fn block_hash(&mut self,number:u64) -> Result<B256,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let block_hash = rt.block_on(self.get_block_hash(number)).unwrap();
+        Ok(block_hash)
+    }
+}
+
+impl DatabaseRef for PslKvDb {
+    type Error = Infallible;
+    
+    #[doc = " Gets basic account information."]
+    fn basic_ref(&self, address:Address) -> Result<Option<AccountInfo> ,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let account = rt.block_on(self.get_account(address)).unwrap();
+        Ok(account.info())
+    }
+    
+    #[doc = " Gets account code by its hash."]
+    fn code_by_hash_ref(&self, code_hash:B256) -> Result<Bytecode,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let contract = rt.block_on(self.get_contract(code_hash)).unwrap();
+        Ok(contract)
+    }
+    
+    #[doc = " Gets storage value of address at index."]
+    fn storage_ref(&self, address:Address, index:StorageKey) -> Result<StorageValue,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let storage = rt.block_on(self.storage_async_ref(address, index)).unwrap();
+        Ok(storage)
+    }
+    
+    #[doc = " Gets block hash by block number."]
+    fn block_hash_ref(&self, number:u64) -> Result<B256,Self::Error>  {
+        let rt = HandleMod(tokio::runtime::Handle::current());
+        let block_hash = rt.block_on(self.get_block_hash(number)).unwrap();
         Ok(block_hash)
     }
 }
