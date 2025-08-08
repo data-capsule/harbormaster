@@ -34,14 +34,14 @@ use crate::{
     },
     worker::{
         app::ClientHandlerTask,
-        block_broadcaster::{BlockBroadcaster, BroadcastMode},
+        block_broadcaster::{BlockBroadcaster, BroadcastMode, BroadcasterConfig},
         block_sequencer::BlockSequencer,
         staging::VoteWithSender,
     },
 };
 
 pub mod app;
-mod block_broadcaster;
+pub mod block_broadcaster;
 pub mod block_sequencer;
 pub mod cache_manager;
 mod staging;
@@ -311,7 +311,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
 
         let bb_ts_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
         let block_broadcaster_to_storage = Arc::new(Mutex::new(BlockBroadcaster::new(
-            config.clone(),
+            BroadcasterConfig::WorkerConfig(config.clone()),
             bb_ts_client,
             BroadcastMode::StorageStar,
             true,
@@ -334,7 +334,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
 
         let bb_ow_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
         let block_broadcaster_to_other_workers = Arc::new(Mutex::new(BlockBroadcaster::new(
-            config.clone(),
+            BroadcasterConfig::WorkerConfig(config.clone()),
             bb_ow_client,
             BroadcastMode::WorkerGossip,
             false,

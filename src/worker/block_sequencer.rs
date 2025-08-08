@@ -91,6 +91,16 @@ impl VectorClock {
     }
 }
 
+impl FromIterator<(SenderType, u64)> for VectorClock {
+    fn from_iter<T: IntoIterator<Item = (SenderType, u64)>>(iter: T) -> Self {
+        let mut vc = VectorClock::new();
+        for (sender, seq_num) in iter {
+            vc.advance(sender, seq_num);
+        }
+        vc
+    }
+}
+
 impl PartialEq for VectorClock {
     fn eq(&self, other: &Self) -> bool {
         self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
@@ -276,20 +286,22 @@ impl BlockSequencer {
         self.curr_block_seq_num += 1;
 
 
-        let me = self.config.get().net_config.name.clone();
-        let me = SenderType::Auth(me, 0);
+        let origin = self.config.get().net_config.name.clone();
+        let me = SenderType::Auth(origin.clone(), 0);
         self.curr_vector_clock.advance(me, seq_num);
 
         let all_writes = Self::wrap_vec(
             Self::dedup_vec(self.all_write_op_bag.drain(..)),
             seq_num,
             Some(self.curr_vector_clock.serialize()),
+            origin.clone(),
         );
 
         let self_writes = Self::wrap_vec(
             Self::dedup_vec(self.self_write_op_bag.drain(..)),
             seq_num,
             None, // No vector for the block that goes to storage.
+            origin,
         );
 
 
@@ -322,6 +334,7 @@ impl BlockSequencer {
         writes: Vec<(CacheKey, CachedValue)>,
         seq_num: u64,
         vector_clock: Option<ProtoVectorClock>,
+        origin: String,
     ) -> ProtoBlock {
         ProtoBlock {
             tx_list: writes.into_iter()
@@ -347,6 +360,7 @@ impl BlockSequencer {
             config_num: 1,
             sig: None,
             vector_clock,
+            origin,
         }
     }
 
@@ -366,7 +380,7 @@ impl BlockSequencer {
     async fn flush_vc_wait_buffer(&mut self) {
         let mut to_remove = Vec::new();
 
-        for (vc, senders) in self.vc_wait_buffer.iter() {
+        for (vc, _) in self.vc_wait_buffer.iter() {
             if self.curr_vector_clock >= *vc {
                 to_remove.push(vc.clone());
             }
@@ -385,5 +399,39 @@ impl BlockSequencer {
         buffer.push(sender);
 
         self.flush_vc_wait_buffer().await;
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vector_clock_ordering() {
+        let vc1 = VectorClock::from_iter(vec![
+            (SenderType::Auth("A".to_string(), 0), 1),
+            (SenderType::Auth("B".to_string(), 0), 2),
+            (SenderType::Auth("C".to_string(), 0), 3),
+        ]);
+
+        let vc2 = VectorClock::from_iter(vec![
+            (SenderType::Auth("A".to_string(), 0), 2),
+            (SenderType::Auth("B".to_string(), 0), 2),
+            (SenderType::Auth("C".to_string(), 0), 4),
+        ]);
+
+        let vc3 = VectorClock::from_iter(vec![
+            (SenderType::Auth("A".to_string(), 0), 2),
+            (SenderType::Auth("B".to_string(), 0), 2),
+            (SenderType::Auth("C".to_string(), 0), 2),
+        ]);
+
+        assert!(vc1 <= vc2);
+        assert!(vc2 >= vc1);
+        assert!(vc1 < vc2);
+
+        assert!(!(vc1 < vc3 && vc3 < vc1));
+        assert!(vc1 != vc3);
     }
 }

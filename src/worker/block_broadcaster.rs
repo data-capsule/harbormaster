@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use log::warn;
 use prost::Message;
 use tokio::{sync::Mutex, sync::oneshot};
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig, WorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
 
 
 pub enum BroadcastMode {
@@ -12,13 +12,18 @@ pub enum BroadcastMode {
     StorageStar,
     /// Broadcast to workers in gossip_downstream_worker_list
     WorkerGossip,
-    // RandomGossip(String) // TODO: Implement this
+    /// Broadcast to all sequencers. This is used by storage server.
+    SequencerStar,
 }
 
 
+pub enum BroadcasterConfig {
+    Config(AtomicConfig),
+    WorkerConfig(AtomicPSLWorkerConfig),
+}
 
 pub struct BlockBroadcaster {
-    config: AtomicPSLWorkerConfig,
+    config: BroadcasterConfig,
     client: PinnedClient,
 
     broadcast_mode: BroadcastMode,
@@ -35,7 +40,19 @@ pub struct BlockBroadcaster {
 }
 
 impl BlockBroadcaster {
-    pub fn new(config: AtomicPSLWorkerConfig, client: PinnedClient, broadcast_mode: BroadcastMode, forward_to_staging: bool, wait_for_signal: bool, block_rx: Receiver<oneshot::Receiver<CachedBlock>>, wait_rx: Option<Receiver<u64>>, staging_tx: Option<Sender<CachedBlock>>) -> Self {
+    pub fn new(config: BroadcasterConfig, client: PinnedClient, broadcast_mode: BroadcastMode, forward_to_staging: bool, wait_for_signal: bool, block_rx: Receiver<oneshot::Receiver<CachedBlock>>, wait_rx: Option<Receiver<u64>>, staging_tx: Option<Sender<CachedBlock>>) -> Self {
+        if let BroadcastMode::StorageStar | BroadcastMode::WorkerGossip = broadcast_mode {
+            if let BroadcasterConfig::Config(_) = &config {
+                panic!("BroadcasterConfig::Config is not supported for SequencerStar or WorkerGossip");
+            }
+        }
+
+        if let BroadcastMode::SequencerStar = broadcast_mode {
+            if let BroadcasterConfig::WorkerConfig(config) = &config {
+                panic!("BroadcasterConfig::WorkerConfig is not supported for StorageStar");
+            }
+        }
+        
         Self {
             config,
             client,
@@ -51,22 +68,51 @@ impl BlockBroadcaster {
     }
 
     fn get_peers(&self) -> Vec<String> {
-        match &self.broadcast_mode {
-            BroadcastMode::StorageStar => {
-                self.config.get().worker_config.storage_list.clone()
+        match &self.config {
+            BroadcasterConfig::Config(config) => {
+                match &self.broadcast_mode {
+                    BroadcastMode::SequencerStar => {
+                        config.get().consensus_config.learner_list.clone()
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
             }
-            BroadcastMode::WorkerGossip => {
-                self.config.get().worker_config.gossip_downstream_worker_list.clone()
-            },
+            BroadcasterConfig::WorkerConfig(config) => {
+                match &self.broadcast_mode {
+                    BroadcastMode::StorageStar => {
+                        config.get().worker_config.storage_list.clone()
+                    }
+                    BroadcastMode::WorkerGossip => {
+                        config.get().worker_config.gossip_downstream_worker_list.clone()
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            }
         }
     }
 
     fn get_success_threshold(&self) -> usize {
+        let n = match &self.config {
+            BroadcasterConfig::WorkerConfig(config) => {
+                match &self.broadcast_mode {
+                    BroadcastMode::StorageStar => {
+                        config.get().worker_config.storage_list.len()
+                    }
+                    _ => 0
+                }
+            }
+            _ => 0,
+        };
+
         match &self.broadcast_mode {
             BroadcastMode::StorageStar => {
-                self.config.get().worker_config.storage_list.len() / 2 + 1
+                n / 2 + 1
             }
-            BroadcastMode::WorkerGossip => 0,
+            _ => 0,
         }
     }
 

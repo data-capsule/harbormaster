@@ -321,7 +321,7 @@ sleep 60
             else:
                 v["worker_config"]["gossip_downstream_worker_list"] = []
 
-            v["consensus_config"]["learner_list"] = []
+            v["consensus_config"]["learner_list"] = sequencer_names[:]
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path
             v["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path

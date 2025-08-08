@@ -81,6 +81,7 @@ message ProtoBlock {
     }
 
     ProtoVectorClock vector_clock = 11;
+    string origin = 12;
 }
 
 message HalfSerializedBlock {

@@ -69,7 +69,7 @@ pub struct RpcConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
-    pub learner_list: Vec<String>,
+    pub learner_list: Vec<String>, // This is used by the storage server as sequencer list.
     pub max_backlog_batch_size: usize,
     pub batch_max_delay_ms: u64,
     pub signature_max_delay_ms: u64,

@@ -8,10 +8,11 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::{ProtoBackfillNack, ProtoBackfillQuery}, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::{ProtoBackfillNack, ProtoBackfillQuery}, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
 use fork_receiver::ForkReceiver;
 use staging::Staging;
 use logserver::LogServer;
+use crate::worker::block_broadcaster::{BlockBroadcaster, BroadcastMode};
 
 pub struct StorageServerContext {
     config: AtomicConfig,
@@ -115,6 +116,9 @@ pub struct StorageNode {
     fork_receiver: Arc<Mutex<ForkReceiver>>,
     staging: Arc<Mutex<Staging>>,
     logserver: Arc<Mutex<LogServer>>,
+
+    /// Forward to sequencer.
+    block_broadcaster: Arc<Mutex<BlockBroadcaster>>,
 }
 
 impl StorageNode {
@@ -171,11 +175,15 @@ impl StorageNode {
 
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), true, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
 
-        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, gc_tx, fork_receiver_cmd_tx);
+        let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
+        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, gc_tx, fork_receiver_cmd_tx, block_broadcaster_tx);
 
         let logserver_storage = storage.get_connector(crypto.get_connector());
         let logserver = LogServer::new(config.clone(), keystore.clone(), logserver_storage, gc_rx, logserver_rx, backfill_request_rx);
 
+        let block_broadcaster_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0).into();
+
+        let block_broadcaster = BlockBroadcaster::new(BroadcasterConfig::Config(config.clone()), block_broadcaster_client, BroadcastMode::SequencerStar, false, false, block_broadcaster_rx, None, None);
 
 
         Self {
@@ -187,6 +195,7 @@ impl StorageNode {
             fork_receiver: Arc::new(Mutex::new(fork_receiver)),
             staging: Arc::new(Mutex::new(staging)),
             logserver: Arc::new(Mutex::new(logserver)),
+            block_broadcaster: Arc::new(Mutex::new(block_broadcaster)),
         }
 
     }
@@ -199,6 +208,7 @@ impl StorageNode {
         let fork_receiver = self.fork_receiver.clone();
         let staging = self.staging.clone();
         let logserver = self.logserver.clone();
+        let block_broadcaster = self.block_broadcaster.clone();
 
         handles.spawn(async move {
             let mut storage = storage.lock().await;
@@ -218,6 +228,10 @@ impl StorageNode {
         });
         handles.spawn(async move {
             LogServer::run(logserver).await;
+        });
+
+        handles.spawn(async move {
+            BlockBroadcaster::run(block_broadcaster).await;
         });
 
 

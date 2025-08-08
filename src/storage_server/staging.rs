@@ -20,6 +20,7 @@ pub struct Staging {
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
 
     last_confirmed_n: HashMap<SenderType, u64>,
+    block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
 }
 
 const PER_PEER_BLOCK_WSS: u64 = 10000;
@@ -31,6 +32,7 @@ impl Staging {
         logserver_tx: Sender<(SenderType, CachedBlock)>,
         gc_tx: Sender<(SenderType, u64)>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
+        block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
     ) -> Self {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let gc_timer = ResettableTimer::new(
@@ -47,6 +49,7 @@ impl Staging {
 
             last_confirmed_n: HashMap::new(),
             gc_timer,
+            block_broadcaster_tx,
         }
     }
 
@@ -124,6 +127,10 @@ impl Staging {
         );
 
         let _ = self.logserver_tx.send((sender.clone(), block.clone())).await;
+
+        let (tx, rx) = oneshot::channel();
+        let _ = self.block_broadcaster_tx.send(rx).await;
+        tx.send(block.clone()).unwrap();
 
         let last_n = self.last_confirmed_n.entry(sender.clone())
             .or_insert(0);

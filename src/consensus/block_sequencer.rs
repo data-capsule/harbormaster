@@ -341,6 +341,8 @@ impl BlockSequencer {
 
         self.perf_add_event(perf_entry_id, "Add QCs", must_sign);
 
+        let origin = self.config.get().net_config.name.clone();
+
         let block = ProtoBlock {
             n,
             parent: Vec::new(),
@@ -354,6 +356,7 @@ impl BlockSequencer {
                 DefferedSignature {},
             )),
             vector_clock: None,
+            origin,
         };
 
         let parent_hash_rx = self.parent_hash_rx.take();
