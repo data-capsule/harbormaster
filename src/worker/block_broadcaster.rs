@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use log::warn;
 use prost::Message;
 use tokio::{sync::Mutex, sync::oneshot};
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig, WorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
 
 
 pub enum BroadcastMode {

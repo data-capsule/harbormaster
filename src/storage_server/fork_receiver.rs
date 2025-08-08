@@ -1,9 +1,9 @@
 use std::{collections::{HashMap, VecDeque}, io::Error, sync::Arc};
 
-use log::{debug, info, trace, warn};
+use log::{debug, warn};
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::{client::{Client, PinnedClient}, SenderType}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::{client::{Client, PinnedClient}, SenderType}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
 
 #[derive(Debug)]
 pub struct ContinuityStats {

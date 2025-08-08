@@ -1,6 +1,5 @@
-use std::{fmt::Debug, fs::{create_dir, exists}, io::Error, sync::Mutex};
+use std::{fmt::Debug, fs::{create_dir, exists}, io::Error};
 
-use indexmap::IndexMap;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 
 use crate::config::{FileStorageConfig, StorageConfig};

@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use async_recursion::async_recursion;
-use bytes::{BufMut as _, BytesMut};
 use futures::{future::try_join_all, FutureExt};
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use tokio::{sync::oneshot, task::spawn_local};
+use tokio::sync::oneshot;
 
 use crate::{
-    consensus::{extra_2pc::{EngraftActionAfterFutureDone, EngraftTwoPCFuture, TwoPCCommand}, logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::{CachedBlock, DIGEST_LENGTH}, proto::{
+    consensus::{extra_2pc::EngraftActionAfterFutureDone, logserver::LogServerCommand, pacemaker::PacemakerCommand}, crypto::CachedBlock, proto::{
         consensus::{
             proto_block::Sig, ProtoNameWithSignature, ProtoQuorumCertificate,
             ProtoSignatureArrayEntry, ProtoVote,
@@ -1004,7 +1003,7 @@ impl Staging {
         };
 
         // Slow path: 2-hop rule
-        let mut new_bci_slow_path = self
+        let new_bci_slow_path = self
             .pending_blocks
             .iter()
             .rev()

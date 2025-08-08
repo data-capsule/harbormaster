@@ -4,22 +4,20 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use base64::engine::general_purpose;
 use base64::Engine as _;
-use gluesql::core::ast_builder::num;
 use log::{debug, error, info};
 use prost::Message;
-use psl::config::{self, Config, PSLWorkerConfig};
+use psl::config::{self, PSLWorkerConfig};
 use psl::consensus::batch_proposal::TxWithAckChanTag;
 use psl::proto::client::ProtoClientReply;
 use psl::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase};
 use psl::rpc::SenderType;
 use psl::utils::channel::{make_channel, Receiver, Sender};
-use psl::{consensus, storage_server, worker};
+use psl::worker;
 use serde::Deserialize;
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::sync::atomic::AtomicU64;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use psl::consensus::engines::kvs::KVSAppEngine;
 use std::io::Write;
 
 #[global_allocator]

@@ -1,13 +1,12 @@
-use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
+use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
 
 use bytes::{BufMut, BytesMut};
 use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
 use futures::SinkExt;
-use itertools::min;
-use log::{error, info, trace, warn};
+use log::{trace, warn};
 use prost::Message;
 use rand::{thread_rng, Rng};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha512};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
 use crate::{config::AtomicConfig, consensus::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, rpc::SenderType, utils::{deserialize_proto_block, get_parent_hash_in_proto_block_ser, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};

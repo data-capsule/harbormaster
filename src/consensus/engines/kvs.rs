@@ -1,24 +1,20 @@
 // use std::collections::{BTreeMap, HashMap};
 use hashbrown::HashMap;
-use rustls::crypto::hash::Hash;
 use std::fmt::Display;
 
-use log::{error, info, trace, warn};
+use log::{trace, warn};
 use serde::{Serialize, Deserialize};
 
 use crate::{config::AtomicConfig, consensus::app::AppEngine};
 
 use crate::proto::execution::{
-    ProtoTransaction, ProtoTransactionPhase, ProtoTransactionOp, ProtoTransactionOpType,
+    ProtoTransactionOpType,
     ProtoTransactionResult, ProtoTransactionOpResult,
 };
 
 use crate::proto::client::{ProtoByzResponse,};
 
-use crate::proto::consensus::{
-    ProtoBlock, ProtoQuorumCertificate, ProtoForkValidation, ProtoVote, ProtoSignatureArrayEntry,
-    ProtoNameWithSignature, proto_block::Sig, DefferedSignature,
-};
+use crate::proto::consensus::ProtoBlock;
 
 #[derive(std::fmt:: Debug, Clone, Serialize, Deserialize)]
 pub struct KVSState {
@@ -273,7 +269,7 @@ impl AppEngine for KVSAppEngine {
             let mut block_result: Vec<ProtoByzResponse> = Vec::new(); 
 
             for (tx_n, tx) in proto_block.tx_list.iter().enumerate() {
-                let mut byz_result = ProtoByzResponse {
+                let byz_result = ProtoByzResponse {
                     block_n: proto_block.n,
                     tx_n: tx_n as u64,
                     client_tag: 0,

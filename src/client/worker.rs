@@ -1,13 +1,12 @@
 use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
-use log::{debug, error, info, trace, warn};
-use nix::libc::stat;
+use log::{debug, error, info, trace};
 use prost::Message as _;
 use sha2::{Digest, Sha512};
-use tokio::{sync::oneshot::error, task::JoinSet, time::sleep};
+use tokio::{task::JoinSet, time::sleep};
 
-use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{default_hash, hash, hash_proto_block_ser, AtomicKeyStore, HashType, KeyStore, DIGEST_LENGTH}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, serialize_proto_block_prefilled, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
+use crate::{client::workload_generators::WrapperMode, config::ClientConfig, crypto::{default_hash, hash, AtomicKeyStore, HashType, KeyStore, DIGEST_LENGTH}, proto::{client::{self, ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoBlock, ProtoFork}, execution::ProtoTransaction, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::{channel::{make_channel, Receiver, Sender}, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser}};
 use crate::rpc::MessageRef;
 use super::{logger::ClientWorkerStat, workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl}};
 
@@ -130,7 +129,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
         let mut waiting_for_byz_response = HashMap::<u64, CheckerTask>::new();
         let mut out_of_order_byz_response = HashMap::<u64, Instant>::new();
         let mut alleged_leader = String::new();
-        let mut sleep_time = Duration::from_secs(1).div_f64(config.workload_config.rate);
+        let sleep_time = Duration::from_secs(1).div_f64(config.workload_config.rate);
         loop {
             match generator_rx.recv().await {
                 Some(req) => {
@@ -341,7 +340,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
 
         sleep(Duration::from_secs(1)).await;
 
-        let mut backoff_time = Duration::from_millis(1000);
+        let backoff_time = Duration::from_millis(1000);
         let mut curr_complaining_requests = 0;
         let max_inflight_requests = self.config.workload_config.max_concurrent_requests;
 

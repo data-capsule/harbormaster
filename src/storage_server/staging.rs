@@ -1,11 +1,11 @@
 use std::{io::Error, pin::Pin, sync::Arc, u64};
 
 use hashbrown::HashMap;
-use log::{debug, error, info, warn};
+use log::{debug, error};
 use prost::Message as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::{ProtoAuthSenderType, ProtoBackfillNack, ProtoBackfillQuery}, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::{ProtoAuthSenderType, ProtoBackfillQuery}, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
 
 use super::fork_receiver::ForkReceiverCommand;
 

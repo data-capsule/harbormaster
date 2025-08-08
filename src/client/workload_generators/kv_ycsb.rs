@@ -1,4 +1,3 @@
-use std::{process::exit, time::Instant};
 
 use log::info;
 use rand::distributions::{Uniform, WeightedIndex};

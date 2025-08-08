@@ -3,7 +3,7 @@ use std::{io::Error, pin::Pin, sync::Arc, time::{Duration, Instant}};
 use log::info;
 use tokio::sync::oneshot;
 
-use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, HashType}, utils::BlackHoleStorageEngine};
+use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector, HashType}};
 
 use super::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer, StorageEngine};
 

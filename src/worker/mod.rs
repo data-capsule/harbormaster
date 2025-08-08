@@ -1,10 +1,10 @@
 use std::{
-    cell::RefCell, io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+    io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc
 };
 
 use app::PSLAppEngine;
-use cache_manager::{CacheCommand, CacheManager};
-use log::{debug, error, info, warn};
+use cache_manager::CacheManager;
+use log::{debug, warn};
 use prost::Message as _;
 use tokio::{
     sync::{mpsc::unbounded_channel, Mutex},
@@ -15,10 +15,10 @@ pub use crate::consensus::batch_proposal::TxWithAckChanTag;
 
 
 use crate::{
-    config::{AtomicConfig, AtomicPSLWorkerConfig, Config, PSLWorkerConfig},
+    config::{AtomicConfig, AtomicPSLWorkerConfig, PSLWorkerConfig},
     crypto::{AtomicKeyStore, CryptoService, KeyStore},
     proto::{
-        checkpoint::{ProtoBackfillNack, ProtoBackfillQuery},
+        checkpoint::ProtoBackfillQuery,
         consensus::ProtoAppendEntries,
         rpc::ProtoPayload,
     },

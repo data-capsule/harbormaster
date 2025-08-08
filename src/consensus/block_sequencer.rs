@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use crate::crypto::{default_hash, FutureHash};
+use crate::crypto::FutureHash;
 use crate::utils::channel::{Receiver, Sender};
-use log::{debug, info, trace, warn};
+use log::{trace, warn};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{oneshot, Mutex};
 
@@ -87,7 +87,7 @@ impl BlockSequencer {
         let perf_counter_unsigned =
             RefCell::new(PerfCounter::new("BlockSequencerUnsigned", &event_order));
 
-        let mut ret = Self {
+        let ret = Self {
             config,
             control_command_rx,
             batch_rx,
@@ -205,13 +205,13 @@ impl BlockSequencer {
         // So, we want to wait for QCs to appear if seq_num - last_qc_n_seen > commit_index_gap_hard / 2.
         // This limits the depth of pipeline (ie, max number of inflight blocks).
 
-        let mut listen_for_new_batch = self.view_is_stable && self.i_am_leader();
-        let mut blocked_for_qc_pass = false;
+        let listen_for_new_batch = self.view_is_stable && self.i_am_leader();
+        let blocked_for_qc_pass = false;
 
         #[cfg(not(feature = "no_qc"))]
         {
             // Is there a QC I can get?
-            let mut qc_check_cond = self.qc_rx.len() > 0;
+            let qc_check_cond = self.qc_rx.len() > 0;
             #[cfg(feature = "no_pipeline")]
             {
                 qc_check_cond = qc_check_cond && self.current_qc_list.len() == 0;

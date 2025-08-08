@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use hashbrown::{HashMap, HashSet};
-use log::{error, warn};
 use tokio::sync::Mutex;
 
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
 
