@@ -124,6 +124,7 @@ impl BlockBroadcaster {
                 serialized_blocks: vec![HalfSerializedBlock {
                     n: block.block.n,
                     serialized_body: block.block_ser.clone(),
+                    origin: block.block.origin.clone(),
 
                     // Unused fields
                     view: block.block.view,

@@ -26,7 +26,7 @@ pub struct ForkReceiver {
     ae_rx: Receiver<(ProtoAppendEntries, SenderType)>,
     crypto: CryptoServiceConnector,
     storage: StorageServiceConnector,
-    staging_tx: Sender<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>,
+    staging_tx: Sender<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, String /* origin */)>, // Sender may not be equal to origin.
 
     /// This is back-channel from staging, hence unbounded.
     /// Otherwise, it may cause a deadlock.
@@ -46,7 +46,7 @@ impl ForkReceiver {
         ae_rx: Receiver<(ProtoAppendEntries, SenderType)>,
         crypto: CryptoServiceConnector,
         storage: StorageServiceConnector,
-        staging_tx: Sender<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>,
+        staging_tx: Sender<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, String /* origin */)>, // Sender may not be equal to origin.
         cmd_rx: UnboundedReceiver<ForkReceiverCommand>,
     ) -> Self {
 
@@ -183,7 +183,7 @@ impl ForkReceiver {
             // Forward it to storage.
             let storage_acked_block = self.storage.put_nonblocking(fut_block).await;
 
-            let _ = self.staging_tx.send((storage_acked_block, sender.clone())).await;
+            let _ = self.staging_tx.send((storage_acked_block, sender.clone(), block.origin)).await;
         }
 
         Ok(())

@@ -336,6 +336,7 @@ impl LogServer {
                     view: block.block.view,
                     view_is_stable: block.block.view_is_stable,
                     config_num: block.block.config_num,
+                    origin: block.block.origin.clone(),
                     serialized_body: block.block_ser.clone(),
                 }).collect(),
         }

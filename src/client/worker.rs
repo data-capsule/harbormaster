@@ -395,6 +395,7 @@ impl<Gen: PerWorkerWorkloadGenerator + Send + Sync + 'static> ClientWorker<Gen> 
                                         serialized_blocks: vec![HalfSerializedBlock {
                                             n, serialized_body,
                                             view: 0, view_is_stable: true, config_num: 0,
+                                            origin: my_name.clone(),
                                         }],
                                     }),
                                     commit_index: 0,

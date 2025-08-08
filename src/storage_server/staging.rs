@@ -1,11 +1,11 @@
-use std::{io::Error, pin::Pin, sync::Arc};
+use std::{io::Error, pin::Pin, sync::Arc, u64};
 
 use hashbrown::HashMap;
 use log::{debug, error, info, warn};
 use prost::Message as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::ProtoBackfillNack, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::{ProtoAuthSenderType, ProtoBackfillNack, ProtoBackfillQuery}, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
 
 use super::fork_receiver::ForkReceiverCommand;
 
@@ -13,14 +13,16 @@ pub struct Staging {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     client: PinnedClient,
-    block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>,
+    block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, String /* origin */)>, // Sender may not be equal to origin.
     logserver_tx: Sender<(SenderType, CachedBlock)>,
     gc_tx: Sender<(SenderType, u64)>,
     gc_timer: Arc<Pin<Box<ResettableTimer>>>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
 
     last_confirmed_n: HashMap<SenderType, u64>,
-    block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
+    block_broadcaster_tx: Option<Sender<oneshot::Receiver<CachedBlock>>>,
+
+    must_vote: bool, // Disabled in the sequencer.
 }
 
 const PER_PEER_BLOCK_WSS: u64 = 10000;
@@ -28,11 +30,12 @@ const PER_PEER_BLOCK_WSS: u64 = 10000;
 impl Staging {
     pub fn new(
         config: AtomicConfig, keystore: AtomicKeyStore,
-        block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>,
+        block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, String /* origin */)>, // Sender may not be equal to origin.
         logserver_tx: Sender<(SenderType, CachedBlock)>,
         gc_tx: Sender<(SenderType, u64)>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
-        block_broadcaster_tx: Sender<oneshot::Receiver<CachedBlock>>,
+        block_broadcaster_tx: Option<Sender<oneshot::Receiver<CachedBlock>>>,
+        must_vote: bool,
     ) -> Self {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let gc_timer = ResettableTimer::new(
@@ -50,6 +53,7 @@ impl Staging {
             last_confirmed_n: HashMap::new(),
             gc_timer,
             block_broadcaster_tx,
+            must_vote,
         }
     }
 
@@ -69,8 +73,8 @@ impl Staging {
             _tick = self.gc_timer.wait() => {
                 self.handle_gc().await?;
             },
-            block_and_sender = self.block_rx.recv() => {
-                self.handle_block(block_and_sender).await?;
+            block_and_sender_and_origin = self.block_rx.recv() => {
+                self.handle_block(block_and_sender_and_origin).await?;
             }
         }
         Ok(())
@@ -87,12 +91,12 @@ impl Staging {
 
 
 
-    async fn handle_block(&mut self, block_and_sender: Option<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType)>) -> Result<(), ()> {
-        if block_and_sender.is_none() {
+    async fn handle_block(&mut self, block_and_sender_and_origin: Option<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType, String)>) -> Result<(), ()> {
+        if block_and_sender_and_origin.is_none() {
             return Err(());
         }
 
-        let (block, sender) = block_and_sender.unwrap();
+        let (block, sender, origin) = block_and_sender_and_origin.unwrap();
 
         let block = block.await;
         debug!("Received block {:?} from sender: {:?}", block, sender);
@@ -110,7 +114,7 @@ impl Staging {
             Err(err) => {
                 // Handle error
 
-                self.handle_error(err, sender).await;
+                self.handle_error(err, sender, origin).await;
             }
         }
 
@@ -128,9 +132,15 @@ impl Staging {
 
         let _ = self.logserver_tx.send((sender.clone(), block.clone())).await;
 
-        let (tx, rx) = oneshot::channel();
-        let _ = self.block_broadcaster_tx.send(rx).await;
-        tx.send(block.clone()).unwrap();
+        let _ = match &self.block_broadcaster_tx {
+            Some(tx) => {
+                let (block_tx, block_rx) = oneshot::channel();
+                let _ = tx.send(block_rx).await;
+                block_tx.send(block.clone()).unwrap();
+            }
+            None => {
+            }
+        };
 
         let last_n = self.last_confirmed_n.entry(sender.clone())
             .or_insert(0);
@@ -146,7 +156,7 @@ impl Staging {
 
     /// 1. Rollback anything that is not confirmed.
     /// 2. Send backfill Nack to sender
-    async fn handle_error(&mut self, err: Error, sender: SenderType) {
+    async fn handle_error(&mut self, err: Error, sender: SenderType, origin: String) {
         error!("Block verification error: {:?}", err);
 
         let last_n = self.last_confirmed_n.get(&sender).unwrap_or(&0);
@@ -155,11 +165,20 @@ impl Staging {
             ForkReceiverCommand::Rollback(sender.clone(), *last_n)
         );
 
-        self.nack(sender, 1 + *last_n).await;
+        let origin = ProtoAuthSenderType {
+            name: origin,
+            sub_id: 0,
+        };
+
+        self.nack(sender, 1 + *last_n, u64::MAX, origin).await;
     }
 
 
     async fn vote_on_block(&mut self, block: CachedBlock, sender: SenderType) {
+        if !self.must_vote {
+            return;
+        }
+
         let vote = ProtoVote {
             fork_digest: block.block_hash.clone(),
             n: block.block.n,
@@ -191,19 +210,17 @@ impl Staging {
 
     }
 
-    async fn nack(&mut self, sender: SenderType, last_index_needed: u64) {
+    async fn nack(&mut self, sender: SenderType, start_index: u64, end_index: u64, origin: ProtoAuthSenderType) {
         let my_name = self.config.get().net_config.name.clone();
-        let nack = ProtoBackfillNack {
-            last_index_needed,
+        let nack = ProtoBackfillQuery {
+            start_index,
+            end_index,
             reply_name: my_name,
-
-            // Unused
-            hints: vec![],
-            origin: None,
+            origin: Some(origin),
         };
 
         let payload = ProtoPayload {
-            message: Some(crate::proto::rpc::proto_payload::Message::BackfillNack(nack)),
+            message: Some(crate::proto::rpc::proto_payload::Message::BackfillQuery(nack)),
         };
 
         let buf = payload.encode_to_vec();

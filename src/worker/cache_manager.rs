@@ -178,7 +178,7 @@ pub type CacheKey = Vec<u8>;
 pub struct CacheManager {
     config: AtomicPSLWorkerConfig,
     command_rx: Receiver<CacheCommand>,
-    block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
+    block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, String /* origin */)>, // Invariant for CacheManager: sender == origin
     block_sequencer_tx: Sender<SequencerCommand>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     cache: HashMap<CacheKey, CachedValue>,
@@ -196,7 +196,7 @@ impl CacheManager {
     pub fn new(
         config: AtomicPSLWorkerConfig,
         command_rx: Receiver<CacheCommand>,
-        block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType)>,
+        block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, String /* origin */)>, // Invariant for CacheManager: sender == origin
         block_sequencer_tx: Sender<SequencerCommand>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     ) -> Self {
@@ -235,7 +235,7 @@ impl CacheManager {
                 Ok(_) = self.blocked_on_vc_wait.as_mut().unwrap() => {
                     self.blocked_on_vc_wait = None;
                 }
-                Some((block_rx, sender)) = self.block_rx.recv() => {
+                Some((block_rx, sender, _)) = self.block_rx.recv() => {
                     let block = block_rx.await.expect("Block rx error");
                     if let Ok(block) = block {
                         self.handle_block(sender, block).await;
@@ -261,7 +261,7 @@ impl CacheManager {
                 Some(command) = self.command_rx.recv() => {
                     self.handle_command(command).await;
                 }
-                Some((block_rx, sender)) = self.block_rx.recv() => {
+                Some((block_rx, sender, _)) = self.block_rx.recv() => {
                     let block = block_rx.await.expect("Block rx error");
                     if let Ok(block) = block {
                         self.handle_block(sender, block).await;
