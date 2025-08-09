@@ -15,7 +15,7 @@ pub struct Staging {
     client: PinnedClient,
     block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, String /* origin */)>, // Sender may not be equal to origin.
     logserver_tx: Sender<(SenderType, CachedBlock)>,
-    gc_tx: Sender<(SenderType, u64)>,
+    gc_tx: Option<Sender<(SenderType, u64)>>,
     gc_timer: Arc<Pin<Box<ResettableTimer>>>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
 
@@ -32,7 +32,7 @@ impl Staging {
         config: AtomicConfig, keystore: AtomicKeyStore,
         block_rx: Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, String /* origin */)>, // Sender may not be equal to origin.
         logserver_tx: Sender<(SenderType, CachedBlock)>,
-        gc_tx: Sender<(SenderType, u64)>,
+        gc_tx: Option<Sender<(SenderType, u64)>>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
         block_broadcaster_tx: Option<Sender<oneshot::Receiver<CachedBlock>>>,
         must_vote: bool,
@@ -81,9 +81,15 @@ impl Staging {
     }
 
     async fn handle_gc(&mut self) -> Result<(), ()> {
+        if self.gc_tx.is_none() {
+            return Ok(());
+        }
+
+        let gc_tx = self.gc_tx.as_ref().unwrap();
+
         for (sender, last_n) in self.last_confirmed_n.iter() {
             if *last_n > PER_PEER_BLOCK_WSS {
-                let _ = self.gc_tx.send((sender.clone(), *last_n - PER_PEER_BLOCK_WSS)).await;
+                let _ = gc_tx.send((sender.clone(), *last_n - PER_PEER_BLOCK_WSS)).await;
             }
         }
         Ok(())

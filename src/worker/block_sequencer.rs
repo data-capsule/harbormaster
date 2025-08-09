@@ -101,6 +101,21 @@ impl FromIterator<(SenderType, u64)> for VectorClock {
     }
 }
 
+impl From<Option<ProtoVectorClock>> for VectorClock {
+    fn from(vc: Option<ProtoVectorClock>) -> Self {
+        match vc {
+            Some(proto_vc) => {
+                let mut vc = VectorClock::new();
+                for entry in proto_vc.entries {
+                    vc.advance(SenderType::Auth(entry.sender, 0), entry.seq_num);
+                }
+                vc
+            }
+            None => VectorClock::new(),
+        }
+    }
+}
+
 impl PartialEq for VectorClock {
     fn eq(&self, other: &Self) -> bool {
         self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)

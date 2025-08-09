@@ -312,7 +312,7 @@ sleep 60
             v["net_config"]["nodes"] = deepcopy(nodes)
 
             if k in sequencer_names:
-                v["consensus_config"]["node_list"] = sequencer_names[:]
+                v["consensus_config"]["node_list"] = storage_names[:]
             else:
                 v["consensus_config"]["node_list"] = nodelist[:]
 

@@ -176,7 +176,7 @@ impl StorageNode {
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), true, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
 
         let (block_broadcaster_tx, block_broadcaster_rx) = make_channel(_chan_depth);
-        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, gc_tx, fork_receiver_cmd_tx, Some(block_broadcaster_tx), true);
+        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, Some(gc_tx), fork_receiver_cmd_tx, Some(block_broadcaster_tx), true);
 
         let logserver_storage = storage.get_connector(crypto.get_connector());
         let logserver = LogServer::new(config.clone(), keystore.clone(), logserver_storage, gc_rx, logserver_rx, backfill_request_rx);

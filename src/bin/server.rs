@@ -3,11 +3,10 @@
 
 use log::{debug, error, info};
 use psl::config::{self, Config, PSLWorkerConfig};
-use psl::{consensus, storage_server, worker};
+use psl::{consensus, sequencer, storage_server, worker};
 use tokio::{runtime, signal};
 use std::process::exit;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
-use psl::consensus::engines::kvs::KVSAppEngine;
 use std::io::Write;
 
 #[global_allocator]
@@ -75,13 +74,13 @@ fn get_feature_set() -> (&'static str, &'static str) {
 }
 
 enum NodeType {
-    Sequencer(consensus::ConsensusNode<KVSAppEngine>),
+    Sequencer(sequencer::SequencerNode),
     Worker(worker::PSLWorker<worker::app::KVSTask>),
     Storage(storage_server::StorageNode),
 
 }
 async fn run_sequencer(cfg: Config) -> NodeType {    
-    let node = consensus::ConsensusNode::<KVSAppEngine>::new(cfg);
+    let node = sequencer::SequencerNode::new(cfg);
     
     NodeType::Sequencer(node)
 }
