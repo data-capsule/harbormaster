@@ -163,7 +163,7 @@ impl SequencerNode {
 
 
         let (auditor_controller_tx, auditor_controller_rx) = make_channel(_chan_depth);
-        let auditor = Auditor::new(config.clone(), auditor_rx, auditor_controller_tx);
+        let auditor = Auditor::new(config.clone(), auditor_rx, auditor_controller_tx, true);
 
         Self {
             config,

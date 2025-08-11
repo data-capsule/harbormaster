@@ -23,10 +23,13 @@ pub struct Auditor {
 
     snapshot_vcs: VecDeque<VectorClock>,
     audit_timer: Arc<Pin<Box<ResettableTimer>>>,
+    forgotten_cut: VectorClock,
+
+    dry_run_mode: bool,
 }
 
 impl Auditor {
-    pub fn new(config: AtomicConfig, auditor_rx: Receiver<(BlockStats, CachedBlock)>, controller_tx: Sender<ControllerCommand>) -> Self {
+    pub fn new(config: AtomicConfig, auditor_rx: Receiver<(BlockStats, CachedBlock)>, controller_tx: Sender<ControllerCommand>, dry_run_mode: bool) -> Self {
         let audit_timer = ResettableTimer::new(Duration::from_millis(config.get().consensus_config.max_audit_delay_ms));
 
         Self {
@@ -41,6 +44,10 @@ impl Auditor {
             snapshot_vcs: VecDeque::new(),
 
             audit_timer,
+
+            dry_run_mode,
+
+            forgotten_cut: VectorClock::new(),
         }
     }
 
@@ -147,17 +154,47 @@ impl Auditor {
     }
 
     async fn verify_reads(&self, block_stats: &BlockStats, block: &CachedBlock) {
+        if self.dry_run_mode {
+            return;
+        }
+
+        // TODO: Read Logging.
+
     }
 
-    async fn apply_updates(&self, block_stats: &BlockStats, block: &CachedBlock) {
+    async fn apply_updates(&mut self, block_stats: &BlockStats, block: &CachedBlock) {
+        // TODO: Replay tx list
+
+        self.snapshot_vcs.push_back(block_stats.read_vc.clone());
+
+
     }
 
-    async fn check_snapshot_limit(&self) {
+    async fn check_snapshot_limit(&mut self) {
+        let mut frontier_cut = HashMap::new();
+        for (_, queue) in &self.unaudited_buffer {
+            // TODO: Find the frontier cut.
+        }
+        // TODO: Remove every snapshot < frontier_cut.
+        if self.state_snapshots.len() >= self.config.get().consensus_config.max_audit_snapshots {
+            self.send_blocking_command().await;
+        } else {
+            self.send_unblocking_command().await;
+        }
     }
 
     async fn throw_error(&self, error: &str) {
         error!("{}", error);
 
+        // Haven't decided what to do when audit fails.
         unimplemented!();
+    }
+    
+    async fn send_blocking_command(&mut self) {
+        self.controller_tx.send(ControllerCommand::BlockWorkers).await.unwrap();
+    }
+
+    async fn send_unblocking_command(&mut self) {
+        self.controller_tx.send(ControllerCommand::UnblockWorkers).await.unwrap();
     }
 }
