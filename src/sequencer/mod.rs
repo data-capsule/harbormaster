@@ -10,7 +10,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::commit_buffer::CommitBuffer, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer}, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
 use crate::storage_server::fork_receiver::ForkReceiver;
 use crate::storage_server::staging::Staging;
 
@@ -113,7 +113,7 @@ pub struct SequencerNode {
     fork_receiver: Arc<Mutex<ForkReceiver>>,
     staging: Arc<Mutex<Staging>>,
     controller: Arc<Mutex<CommitBuffer>>,
-    // logserver: Arc<Mutex<LogServer>>,
+    auditor: Arc<Mutex<Auditor>>,
 }
 
 impl SequencerNode {
@@ -161,6 +161,10 @@ impl SequencerNode {
         let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, fork_receiver_cmd_tx, None, false);
         let controller = CommitBuffer::new(config.clone(), logserver_rx, auditor_tx);
 
+
+        let (auditor_controller_tx, auditor_controller_rx) = make_channel(_chan_depth);
+        let auditor = Auditor::new(config.clone(), auditor_rx, auditor_controller_tx);
+
         Self {
             config,
             keystore,
@@ -170,7 +174,7 @@ impl SequencerNode {
             fork_receiver: Arc::new(Mutex::new(fork_receiver)),
             staging: Arc::new(Mutex::new(staging)),
             controller: Arc::new(Mutex::new(controller)),
-            
+            auditor: Arc::new(Mutex::new(auditor)),
         }
 
     }
@@ -183,7 +187,7 @@ impl SequencerNode {
         let fork_receiver = self.fork_receiver.clone();
         let staging = self.staging.clone();
         let controller = self.controller.clone();
-        // let logserver = self.logserver.clone();
+        let auditor = self.auditor.clone();
 
         handles.spawn(async move {
             let mut storage = storage.lock().await;
@@ -203,6 +207,9 @@ impl SequencerNode {
         });
         handles.spawn(async move {
             CommitBuffer::run(controller).await;
+        });
+        handles.spawn(async move {
+            Auditor::run(auditor).await;
         });
 
         handles

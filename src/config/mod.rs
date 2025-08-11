@@ -82,6 +82,8 @@ pub struct ConsensusConfig {
     pub commit_index_gap_hard: u64, // ci - bci >= this -> followers trigger view change.
 
     pub max_audit_snapshots: usize, // Only used by the sequencer.
+    pub max_audit_buffer_size: usize, // Only used by the sequencer.
+    pub max_audit_delay_ms: u64, // Only used by the sequencer.
 }
 
 
@@ -209,6 +211,8 @@ impl WorkerConfig {
             commit_index_gap_soft: 0,
             commit_index_gap_hard: 0,
             max_audit_snapshots: 0,
+            max_audit_buffer_size: 0,
+            max_audit_delay_ms: 10000000,
         }
     }
 }
@@ -283,7 +287,8 @@ impl ClientConfig {
                 commit_index_gap_soft: 256,
                 commit_index_gap_hard: 512,
                 max_audit_snapshots: 5,
-
+                max_audit_buffer_size: 10,
+                max_audit_delay_ms: 10000000,
                 liveness_u: 1,
 
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),

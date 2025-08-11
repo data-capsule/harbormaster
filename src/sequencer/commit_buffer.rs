@@ -19,9 +19,9 @@ pub struct CommitBuffer {
 
 #[derive(Clone)]
 pub struct BlockStats {
-    origin: String,
-    read_vc: VectorClock,
-    seq_num: u64,
+    pub(crate) origin: String,
+    pub(crate) read_vc: VectorClock,
+    pub(crate) seq_num: u64,
 
 }
 

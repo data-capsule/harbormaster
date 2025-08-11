@@ -59,6 +59,8 @@ fn test_nodeconfig_serialize() {
         commit_index_gap_soft: 256,
         commit_index_gap_hard: 512,
         max_audit_snapshots: 5,
+        max_audit_buffer_size: 10,
+        max_audit_delay_ms: 10000000,
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
@@ -218,6 +220,8 @@ async fn test_atomic_config_access() {
         commit_index_gap_soft: 256,
         commit_index_gap_hard: 512,
         max_audit_snapshots: 5,
+        max_audit_buffer_size: 10,
+        max_audit_delay_ms: 10000000,
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
