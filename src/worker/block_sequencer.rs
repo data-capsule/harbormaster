@@ -303,6 +303,7 @@ impl BlockSequencer {
 
         let origin = self.config.get().net_config.name.clone();
         let me = SenderType::Auth(origin.clone(), 0);
+        let read_vc = self.curr_vector_clock.clone();
         self.curr_vector_clock.advance(me, seq_num);
 
         let all_writes = Self::wrap_vec(
@@ -315,7 +316,7 @@ impl BlockSequencer {
         let self_writes = Self::wrap_vec(
             Self::dedup_vec(self.self_write_op_bag.drain(..)),
             seq_num,
-            None, // No vector for the block that goes to storage.
+            Some(read_vc.serialize()),
             origin,
         );
 

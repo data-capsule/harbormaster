@@ -10,10 +10,18 @@ pub enum ControllerCommand {
     UnblockWorkers,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+enum BlockingState {
+    Unblocked = 0,
+    Blocked = 1,
+}
+
 pub struct Controller {
     config: AtomicConfig,
     client: PinnedClient,
     command_rx: Receiver<ControllerCommand>,
+
+    blocking_state: BlockingState,
 }
 
 impl Controller {
@@ -22,6 +30,7 @@ impl Controller {
             config,
             client,
             command_rx,
+            blocking_state: BlockingState::Unblocked,
         }
     }
 
@@ -49,10 +58,17 @@ impl Controller {
     }
 
     async fn block_workers(&mut self) {
+        if self.blocking_state == BlockingState::Blocked {
+            return;
+        }
         info!("Blocking workers.");
+        self.blocking_state = BlockingState::Blocked;
     }
 
     async fn unblock_workers(&mut self) {
+        if self.blocking_state == BlockingState::Unblocked {
+            return;
+        }
         info!("Unblocking workers.");
     }
 }

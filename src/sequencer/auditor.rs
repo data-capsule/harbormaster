@@ -96,12 +96,14 @@ impl Auditor {
     /// 4. Unblock when the workers are updated.
     async fn do_audit(&mut self) {
         while self.unaudited_buffer_size > 0 {
+            self.cleanup_old_snapshots().await;
+
             let Some((target_origin, _)) = self.unaudited_buffer.iter()
                 .filter(|(_, queue)| !queue.is_empty()
                     && self.is_snapshot_available(&queue.front().unwrap().0.read_vc))
                 .next()
             else {
-                self.throw_error("There must have been a block that could have been audited. Invariant violated.");
+                self.throw_error("There must have been a block that could have been audited. Invariant violated.").await;
                 return;
             };
 
@@ -183,7 +185,8 @@ impl Auditor {
         // TODO: Replay tx list
     }
 
-    async fn check_snapshot_limit(&mut self) {
+
+    async fn cleanup_old_snapshots(&mut self) {
         let mut frontier_cut = HashMap::new();
         for (_, queue) in &self.unaudited_buffer {
             if queue.is_empty() {
@@ -205,7 +208,10 @@ impl Auditor {
         
 
         self.forget_snapshots(&frontier_cut).await;
+    }
 
+    async fn check_snapshot_limit(&mut self) {
+        
         if self.state_snapshots.len() >= self.config.get().consensus_config.max_audit_snapshots {
             self.send_blocking_command().await;
         } else {
@@ -239,6 +245,8 @@ impl Auditor {
     }
 
     async fn log_stats(&mut self) {
-        info!("Snapshot VC: {:?}", self.snapshot_vcs);
+        info!("Number of snapshots: {}", self.snapshot_vcs.len());
+        info!("Forgotten cut: {}", self.forgotten_cut);
+        info!("Unaudited buffer size: {}", self.unaudited_buffer_size);
     }
 }
