@@ -5,7 +5,7 @@ use log::{error, info, warn};
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
-use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::ProtoTransactionOpType, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::{BlockSeqNumQuery, VectorClock}};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::{BlockSeqNumQuery, VectorClock}};
 use crate::worker::block_sequencer::SequencerCommand;
 
 #[derive(Error, Debug)]
@@ -358,23 +358,7 @@ impl CacheManager {
 
             let ops = tx.on_crash_commit.as_ref().unwrap();
             for op in &ops.ops {
-                if op.op_type != ProtoTransactionOpType::Write as i32 {
-                    continue;
-                }
-
-                if op.operands.len() != 2 {
-                    continue;
-                }
-
-                let key = &op.operands[0];
-                let value = &op.operands[1];
-                
-                let cached_value = bincode::deserialize::<CachedValue>(&value);
-                if cached_value.is_err() {
-                    warn!("Failed to deserialize cached value: {:?}", value);
-                    continue;
-                }
-                let cached_value = cached_value.unwrap();
+                let Some((key, cached_value)) = process_tx_op(op) else { continue };
 
                 // let cached_value = CachedValue {
                 //     value,
@@ -385,8 +369,8 @@ impl CacheManager {
                 // If this put request leads to an update,
                 // It should be propagated downstream in the gossip/multicast tree,
                 // As they may or may not receive the update directly.
-                let (should_propagate, seq_num) = if self.cache.contains_key(key) {
-                    let res = self.cache.get_mut(key).unwrap().merge_cached(cached_value.clone());
+                let (should_propagate, seq_num) = if self.cache.contains_key(&key) {
+                    let res = self.cache.get_mut(&key).unwrap().merge_cached(cached_value.clone());
                     match res {
                         Ok(seq_num) => (true, seq_num),
                         Err(_old_seq_num) => (false, 0 /* doesn't matter */)
@@ -435,3 +419,24 @@ impl CacheManager {
     }
 }
 
+pub fn process_tx_op(op: &ProtoTransactionOp) -> Option<(CacheKey, CachedValue)> {
+    if op.op_type != ProtoTransactionOpType::Write as i32 {
+        return None;
+    }
+
+    if op.operands.len() != 2 {
+        return None;
+    }
+
+    let key = &op.operands[0];
+    let value = &op.operands[1];
+    
+    let cached_value = bincode::deserialize::<CachedValue>(&value);
+    if cached_value.is_err() {
+        warn!("Failed to deserialize cached value: {:?}", value);
+        return None;
+    }
+    let cached_value = cached_value.unwrap();
+
+    Some((key.clone(), cached_value))
+}

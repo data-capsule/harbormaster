@@ -3,7 +3,7 @@ use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration}
 use log::{error, info};
 use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, sequencer::{commit_buffer::BlockStats, controller::ControllerCommand}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{CacheKey, CachedValue}}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::{commit_buffer::BlockStats, controller::ControllerCommand}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{process_tx_op, CacheKey, CachedValue}}};
 
 pub struct Auditor {
     config: AtomicConfig,
@@ -27,6 +27,9 @@ pub struct Auditor {
 
     /// Everything strictly < forgotten_cut is forgotten. The forgotten_cut itself is not forgotten. Or anything that is concurrent with it.
     forgotten_cut: VectorClock,
+
+    /// For each origin, the last seq_num that was applied.
+    applied_cut: VectorClock,
 
     dry_run_mode: bool,
 }
@@ -53,6 +56,8 @@ impl Auditor {
             dry_run_mode,
 
             forgotten_cut: VectorClock::new(),
+            applied_cut: VectorClock::new(),
+
         }
     }
 
@@ -95,9 +100,8 @@ impl Auditor {
     /// 3. If number of snapshots exceeds the limit, send command to block the workers.
     /// 4. Unblock when the workers are updated.
     async fn do_audit(&mut self) {
+        // self.cleanup_old_snapshots().await; // TODO: Uncomment this.
         while self.unaudited_buffer_size > 0 {
-            self.cleanup_old_snapshots().await;
-
             let Some((target_origin, _)) = self.unaudited_buffer.iter()
                 .filter(|(_, queue)| !queue.is_empty()
                     && self.is_snapshot_available(&queue.front().unwrap().0.read_vc))
@@ -156,6 +160,7 @@ impl Auditor {
     }
 
     fn is_snapshot_available(&self, vc: &VectorClock) -> bool {
+        info!("Checking if snapshot is available for vc: {}.", vc);
         // The zero vc is always available.
         if vc.iter().all(|(_, v)| *v == 0) {
             return true;
@@ -175,14 +180,29 @@ impl Auditor {
     }
 
     async fn apply_updates(&mut self, block_stats: &BlockStats, block: &CachedBlock) {
+        self.applied_cut.advance(SenderType::Auth(block_stats.origin.clone(), 0), block_stats.seq_num);
         
-        self.snapshot_vcs.push_back(block_stats.read_vc.clone());
+        let _applied_cut = self.applied_cut.clone();
+        self.snapshot_vcs.push_back(_applied_cut.clone());
         
         if self.dry_run_mode {
             return;
         }
         
-        // TODO: Replay tx list
+        for tx in &block.block.tx_list {
+            let Some(on_crash_commit) = &tx.on_crash_commit else { continue };
+
+            for op in &on_crash_commit.ops {
+                let Some((key, cached_value)) = process_tx_op(op) else { continue };
+
+                self.state_snapshots
+                    .entry(key.clone())
+                    .or_insert(VecDeque::new())
+                    .push_back((_applied_cut.clone(), cached_value));
+
+            }
+        }
+
     }
 
 
@@ -221,7 +241,7 @@ impl Auditor {
 
     async fn throw_error(&self, error: &str) {
         error!("{}", error);
-        panic!("Killing the auditor.");
+        // panic!("Killing the auditor.");
         // Haven't decided what to do when audit fails.
     }
     

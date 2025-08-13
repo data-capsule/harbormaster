@@ -1,6 +1,7 @@
-use std::{fmt::{self, Display}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::Duration};
+use std::{fmt::{self, Display, Debug}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::Duration};
 
 use hashbrown::HashMap;
+use itertools::Itertools;
 use log::info;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
@@ -48,7 +49,7 @@ pub enum SequencerCommand {
     WaitForVC(VectorClock, oneshot::Sender<()>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VectorClock(HashMap<SenderType, u64>);
 
 impl Deref for VectorClock {
@@ -169,10 +170,25 @@ impl std::hash::Hash for VectorClock {
 
 impl Display for VectorClock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (sender, seq_num) in self.0.iter() {
+        write!(f, "<")?;
+        for (sender, seq_num) in self.0.iter().sorted_by_key(|(sender, _)| sender.to_name_and_sub_id().0) {
             let (name, _) = sender.to_name_and_sub_id();
             write!(f, "{} -> {} ", name, seq_num)?;
         }
+        write!(f, ">")?;
+
+        Ok(())
+    }
+}
+
+impl Debug for VectorClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<")?;
+        for (sender, seq_num) in self.0.iter().sorted_by_key(|(sender, _)| sender.to_name_and_sub_id().0) {
+            let (name, _) = sender.to_name_and_sub_id();
+            write!(f, "{} -> {} ", name, seq_num)?;
+        }
+        write!(f, ">")?;
 
         Ok(())
     }
@@ -304,7 +320,8 @@ impl BlockSequencer {
         let origin = self.config.get().net_config.name.clone();
         let me = SenderType::Auth(origin.clone(), 0);
         let read_vc = self.curr_vector_clock.clone();
-        self.curr_vector_clock.advance(me, seq_num);
+        self.curr_vector_clock.advance(me.clone(), seq_num);
+        assert!(read_vc.get(&me) + 1 == seq_num);
 
         let all_writes = Self::wrap_vec(
             Self::dedup_vec(self.all_write_op_bag.drain(..)),
