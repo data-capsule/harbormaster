@@ -10,7 +10,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller}, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, lockserver::{LockServer, LockServerCommand}}, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
 use crate::storage_server::fork_receiver::ForkReceiver;
 use crate::storage_server::staging::Staging;
 
@@ -18,6 +18,7 @@ pub struct SequencerContext {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
+    lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType)>,
 }
 
 #[derive(Clone)]
@@ -28,11 +29,13 @@ impl PinnedSequencerContext {
         config: AtomicConfig,
         keystore: AtomicKeyStore,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
+        lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType)>,
     ) -> Self {
         let context = SequencerContext {
             config,
             keystore,
             fork_receiver_tx,
+            lock_server_tx,
         };
         Self(Arc::new(Box::pin(context)))
     }
@@ -84,6 +87,12 @@ impl ServerContextType for PinnedSequencerContext {
                     .expect("Channel send error");
                 return Ok(RespType::NoResp);
             },
+            crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
+                let lock_server_command = LockServer::to_lock_server_command(proto_client_request);
+                self.lock_server_tx.send((lock_server_command, sender)).await
+                    .expect("Channel send error");
+                return Ok(RespType::NoResp);
+            },
             // crate::proto::rpc::proto_payload::Message::BackfillQuery(proto_backfill_query) => {
             //     self.backfill_request_tx.send(proto_backfill_query).await
             //         .expect("Channel send error");
@@ -114,20 +123,24 @@ pub struct SequencerNode {
     staging: Arc<Mutex<Staging>>,
     commit_buffer: Arc<Mutex<CommitBuffer>>,
     auditor: Arc<Mutex<Auditor>>,
+    lock_server: Arc<Mutex<LockServer>>,
     controller: Arc<Mutex<Controller>>,
 }
 
 impl SequencerNode {
     pub fn new(config: Config) -> Self {
         let (fork_receiver_tx, fork_receiver_rx) = make_channel(config.rpc_config.channel_depth as usize);
+        let (lock_server_tx, lock_server_rx) = make_channel(config.rpc_config.channel_depth as usize);
         // let (backfill_request_tx, backfill_request_rx) = make_channel(config.rpc_config.channel_depth as usize);
-        Self::mew(config, fork_receiver_tx, fork_receiver_rx)
+        Self::mew(config, fork_receiver_tx, fork_receiver_rx, lock_server_tx, lock_server_rx)
     }
 
     pub fn mew(
         config: Config,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         fork_receiver_rx: Receiver<(ProtoAppendEntries, SenderType)>,
+        lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType)>,
+        lock_server_rx: Receiver<(Vec<LockServerCommand>, SenderType)>,
     ) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
         let _num_crypto_tasks = config.consensus_config.num_crypto_workers;
@@ -147,6 +160,7 @@ impl SequencerNode {
             config.clone(),
             keystore.clone(),
             fork_receiver_tx,
+            lock_server_tx,
         );
         let server = Server::new_atomic(config.clone(), ctx, keystore.clone());
 
@@ -169,6 +183,9 @@ impl SequencerNode {
         let controller_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0);
         let controller = Controller::new(config.clone(), controller_client.into(), auditor_controller_rx);
 
+        let (lock_server_controller_tx, lock_server_controller_rx) = make_channel(_chan_depth);
+        let lock_server = LockServer::new(config.clone(), lock_server_rx, lock_server_controller_tx);
+    
         Self {
             config,
             keystore,
@@ -180,6 +197,7 @@ impl SequencerNode {
             commit_buffer: Arc::new(Mutex::new(commit_buffer)),
             auditor: Arc::new(Mutex::new(auditor)),
             controller: Arc::new(Mutex::new(controller)),
+            lock_server: Arc::new(Mutex::new(lock_server)),
         }
 
     }
@@ -194,6 +212,7 @@ impl SequencerNode {
         let commit_buffer = self.commit_buffer.clone();
         let auditor = self.auditor.clone();
         let controller = self.controller.clone();
+        let lock_server = self.lock_server.clone();
 
         handles.spawn(async move {
             let mut storage = storage.lock().await;
@@ -219,6 +238,9 @@ impl SequencerNode {
         });
         handles.spawn(async move {
             Controller::run(controller).await;
+        });
+        handles.spawn(async move {
+            LockServer::run(lock_server).await;
         });
 
         handles

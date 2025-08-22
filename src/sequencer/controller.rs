@@ -3,11 +3,14 @@ use std::sync::Arc;
 use log::info;
 use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, rpc::client::PinnedClient, utils::channel::Receiver};
+use crate::{config::AtomicConfig, rpc::{client::PinnedClient, SenderType}, utils::channel::Receiver, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
 
 pub enum ControllerCommand {
-    BlockWorkers,
-    UnblockWorkers,
+    BlockAllWorkers,
+    UnblockAllWorkers,
+
+    /// This is used to grant release-consistent locks to a worker.
+    BlockingLockAcquire(CacheKey, SenderType, VectorClock)
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
@@ -46,18 +49,21 @@ impl Controller {
         let cmd = self.command_rx.recv().await.unwrap();
 
         match cmd {
-            ControllerCommand::BlockWorkers => {
-                self.block_workers().await;
+            ControllerCommand::BlockAllWorkers => {
+                self.block_all_workers().await;
             }
-            ControllerCommand::UnblockWorkers => {
-                self.unblock_workers().await;
+            ControllerCommand::UnblockAllWorkers => {
+                self.unblock_all_workers().await;
+            }
+            ControllerCommand::BlockingLockAcquire(key, sender, vc) => {
+                self.blocking_lock_acquire(key, sender, vc).await;
             }
         }
 
         Ok(())
     }
 
-    async fn block_workers(&mut self) {
+    async fn block_all_workers(&mut self) {
         if self.blocking_state == BlockingState::Blocked {
             return;
         }
@@ -65,10 +71,17 @@ impl Controller {
         self.blocking_state = BlockingState::Blocked;
     }
 
-    async fn unblock_workers(&mut self) {
+    async fn unblock_all_workers(&mut self) {
         if self.blocking_state == BlockingState::Unblocked {
             return;
         }
         info!("Unblocking workers.");
+    }
+
+    async fn blocking_lock_acquire(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock) {
+        if self.blocking_state == BlockingState::Blocked {
+            return;
+        }
+        info!("Blocking worker {:?} till VC {} to acquire lock on {:?}.", sender, vc, key);
     }
 }

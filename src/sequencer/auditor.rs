@@ -288,11 +288,11 @@ impl Auditor {
     }
     
     async fn send_blocking_command(&mut self) {
-        self.controller_tx.send(ControllerCommand::BlockWorkers).await.unwrap();
+        self.controller_tx.send(ControllerCommand::BlockAllWorkers).await.unwrap();
     }
 
     async fn send_unblocking_command(&mut self) {
-        self.controller_tx.send(ControllerCommand::UnblockWorkers).await.unwrap();
+        self.controller_tx.send(ControllerCommand::UnblockAllWorkers).await.unwrap();
     }
 
     fn get_snapshot_vc_glb(&self) -> Vec<VectorClock> {
