@@ -147,6 +147,17 @@ pub struct CryptoServiceConnector {
     num_tasks: usize,
 }
 
+impl Clone for CryptoServiceConnector {
+    fn clone(&self) -> Self {
+        let cmd_txs = self.cmd_txs.iter().map(|tx| tx.clone()).collect();
+        let round_robin = thread_rng().gen();
+        let num_tasks = self.num_tasks;
+        Self { cmd_txs, round_robin, num_tasks }
+    }
+}
+
+
+
 
 impl CryptoService {
     pub fn new(num_tasks: usize, keystore: AtomicKeyStore, config: AtomicConfig) -> Self {
