@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use prost::Message as _;
 use tokio::sync::{oneshot, Mutex};
 
@@ -198,6 +198,8 @@ impl LogServer {
     }
 
     async fn handle_query(&mut self, query: ProtoBackfillQuery, is_remote: bool) -> Option<ProtoAppendEntries> {
+        debug!("Received backfill query: {:?}", query);
+
         let origin = query.origin;
         if origin.is_none() {
             return None;

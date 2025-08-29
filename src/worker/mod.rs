@@ -324,7 +324,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         )));
 
         let staging = Arc::new(Mutex::new(Staging::new(
-            config.clone(),
+            config.clone(), 0,
             crypto.get_connector(),
             vote_rx,
             staging_rx,

@@ -22,6 +22,7 @@ pub type VoteWithSender = (SenderType, ProtoVote);
 /// ```
 pub struct Staging {
     config: AtomicPSLWorkerConfig,
+    chain_id: u64,
     crypto: CryptoServiceConnector,
 
     vote_rx: Receiver<VoteWithSender>,
@@ -40,9 +41,10 @@ pub struct Staging {
 }
 
 impl Staging {
-    pub fn new(config: AtomicPSLWorkerConfig, crypto: CryptoServiceConnector, vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>, block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>, client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, chain_id: u64, crypto: CryptoServiceConnector, vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>, block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>, client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>) -> Self {
         Self {
             config,
+            chain_id,
             crypto,
             vote_rx,
             block_rx,
@@ -141,7 +143,7 @@ impl Staging {
     async fn notify_downstream(&mut self, new_ci: u64) {
         // Send all blocks > self.commit_index <= new_ci to the logserver.
         let me = self.config.get().net_config.name.clone();
-        let me = SenderType::Auth(me, 0);
+        let me = SenderType::Auth(me, self.chain_id);
         for block in &self.block_buffer {
             if block.block.n > self.commit_index && block.block.n <= new_ci {
                 let _ = self.logserver_tx.send((me.clone(), block.clone())).await;
