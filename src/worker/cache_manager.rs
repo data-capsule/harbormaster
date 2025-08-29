@@ -102,6 +102,10 @@ pub struct CachedValue {
 
 impl CachedValue {
 
+    pub fn get_value(&self) -> Vec<u8> {
+        self.value.clone()
+    }
+
     /// Completely new value, with seq_num = 1
     pub fn new(value: Vec<u8>, val_hash: BigInt) -> Self {
         Self::new_with_seq_num(value, 1, val_hash)
