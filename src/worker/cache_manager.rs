@@ -449,10 +449,8 @@ impl CacheManager {
     }
 
     async fn handle_block(&mut self, sender: SenderType, block: CachedBlock) {
-        let (name, _) = sender.to_name_and_sub_id();
-        if name.contains("god") {
-            error!("Received god block");
-        }
+        let name = block.block.origin.clone();
+        
         for tx in &block.block.tx_list {
             if tx.on_crash_commit.is_none() {
                 continue;
@@ -504,19 +502,22 @@ impl CacheManager {
             }
         }
 
-        let block_seq_num = block.block.n;
-        let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
-            sender: sender.clone(),
-            block_seq_num,
-        }).await;
-
-
-        // A new block can be formed now.
-        self.last_batch_time = Instant::now();
-        let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
-
-        // Confirm the block to the fork receiver.
-        let _ = self.fork_receiver_cmd_tx.send(ForkReceiverCommand::Confirm(sender, block_seq_num));
+        if !name.contains("god") {
+            let block_seq_num = block.block.n;
+            let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
+                sender: sender.clone(),
+                block_seq_num,
+            }).await;
+            
+            
+            
+            // A new block can be formed now.
+            self.last_batch_time = Instant::now();
+            let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;
+            
+            // Confirm the block to the fork receiver.
+            let _ = self.fork_receiver_cmd_tx.send(ForkReceiverCommand::Confirm(sender, block_seq_num));
+        }
 
     }
 }

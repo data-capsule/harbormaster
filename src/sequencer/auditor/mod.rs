@@ -115,7 +115,8 @@ impl Auditor {
 
         let min_vc = self.get_min_gc_vc();
 
-        self.snapshot_store.prune_snapshots(&min_vc);
+        self.snapshot_store.prune_lesser_snapshots(&min_vc);
+        self.snapshot_store.prune_concurrent_snapshots(&self.gc_vcs.values().collect::<Vec<_>>());
     }
 
     fn get_min_gc_vc(&self) -> VectorClock {

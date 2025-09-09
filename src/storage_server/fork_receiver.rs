@@ -165,6 +165,8 @@ impl ForkReceiver {
         }
 
         let origin = fork.serialized_blocks[0].origin.clone();
+        let needs_continuity_check = !origin.contains("god");
+
         let chain_id = fork.serialized_blocks[0].chain_id;
         let origin = SenderType::Auth(origin, chain_id);
  
@@ -182,7 +184,9 @@ impl ForkReceiver {
             let parent_hash = Self::find_parent_hash(stats, &block);
             let (fut_block, hash, _parent_hash) = self.crypto.verify_and_prepare_block_simple(block.serialized_body, parent_hash, origin.clone(), self.check_parent_hash).await;
             
-            Self::append_block(stats, _n, hash).await;
+            if needs_continuity_check {
+                Self::append_block(stats, _n, hash).await;
+            }
             
             Self::reset_parent_hash(stats, _n - 1, _parent_hash);
 

@@ -101,21 +101,23 @@ impl PerWorkerAuditor {
 
     /// Returns true if blocks were audited.
     async fn maybe_audit_blocks(&mut self) -> bool {
-        if self.unaudited_buffer.is_empty() {
-            return false;
+        let mut audit_successful = false;
+        while !self.unaudited_buffer.is_empty() {
+
+            let read_vc = &self.unaudited_buffer.front().unwrap().clone()
+                .block.vector_clock;
+            let read_vc = VectorClock::from(read_vc.clone());
+
+            if read_vc <= self.available_vc {
+                let block = self.unaudited_buffer.pop_front().unwrap();
+                self.do_audit_block(block, read_vc).await;
+                audit_successful = true;
+            } else {
+                break;
+            }
         }
 
-        let read_vc = &self.unaudited_buffer.front().unwrap().clone()
-            .block.vector_clock;
-        let read_vc = VectorClock::from(read_vc.clone());
-
-        if read_vc <= self.available_vc {
-            let block = self.unaudited_buffer.pop_front().unwrap();
-            self.do_audit_block(block, read_vc).await;
-            return true;
-        }
-
-        return false;
+        audit_successful
     }
 
     async fn do_audit_block(&mut self, block: CachedBlock, read_vc: VectorClock) {

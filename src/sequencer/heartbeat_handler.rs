@@ -12,11 +12,16 @@ pub struct HeartbeatHandler {
     heartbeat_vcs: HashMap<SenderType, VectorClock>,
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
     already_blocked: bool,
+
+    __num_workers: usize,
 }
 
 impl HeartbeatHandler {
     pub fn new(config: AtomicConfig, heartbeat_rx: Receiver<(ProtoVectorClock, SenderType)>, controller_tx: Sender<ControllerCommand>) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
+        let __num_workers = config.get().net_config.nodes.keys()
+            .filter(|name| name.starts_with("node"))
+            .collect::<HashSet<_>>().len();
         Self {
             config,
             heartbeat_rx,
@@ -24,6 +29,8 @@ impl HeartbeatHandler {
             heartbeat_vcs: HashMap::new(),
             log_timer,
             already_blocked: false,
+
+            __num_workers,
         }
     }
 
@@ -53,22 +60,31 @@ impl HeartbeatHandler {
 
     async fn handle_heartbeat(&mut self, proto_heartbeat_vc: ProtoVectorClock, sender: SenderType) {
         self.heartbeat_vcs.insert(sender, VectorClock::from(Some(proto_heartbeat_vc)));
+        let unique_heartbeat_vcs = self.heartbeat_vcs.values().cloned().collect::<HashSet<_>>();
+        error!("Heartbeat VCs: {:?}. Unique heartbeat VCs: {}", self.heartbeat_vcs, unique_heartbeat_vcs.len());
+        if self.heartbeat_vcs.len() < self.__num_workers {
+            return;
+        }
+        
 
         let diameter = self.get_snapshot_lattice_diameter();
+
+        let blocking_criteria = diameter > self.config.get().consensus_config.max_audit_snapshots;
+        let unblocking_criteria = unique_heartbeat_vcs.len() <= 1;
         
-        if diameter > self.config.get().consensus_config.max_audit_snapshots {
-            if !self.already_blocked {
-                error!("Heartbeat VCs: {:?}, Diameter: {}", self.heartbeat_vcs, diameter);
-                error!("Blocking all workers.");
-                self.already_blocked = true;
-                self.controller_tx.send(ControllerCommand::BlockAllWorkers).await.unwrap();
-            }
-        } else {
-            if self.already_blocked {
-                error!("Unblocking all workers.");
+
+        if unblocking_criteria {
+            // if self.already_blocked {
+                error!("Unblocking all workers. Heartbeat VCs: {:?}, Diameter: {}, Unique heartbeat VCs: {}", self.heartbeat_vcs, diameter, unique_heartbeat_vcs.len());
                 self.already_blocked = false;
                 self.controller_tx.send(ControllerCommand::UnblockAllWorkers).await.unwrap();
-            }
+            // }
+        } else if blocking_criteria {
+            // if !self.already_blocked {
+                error!("Blocking all workers. Heartbeat VCs: {:?}, Diameter: {}, Unique heartbeat VCs: {}", self.heartbeat_vcs, diameter, unique_heartbeat_vcs.len());
+                self.already_blocked = true;
+                self.controller_tx.send(ControllerCommand::BlockAllWorkers).await.unwrap();
+            // }
         }
         
     }

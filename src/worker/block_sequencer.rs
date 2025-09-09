@@ -323,7 +323,10 @@ impl BlockSequencer {
                     // We want to keep the succint reprensentation.
                     return;
                 }
+
+                error!("Advancing VC to {} from {:?}", block_seq_num, sender);
                 self.curr_vector_clock.advance(sender, block_seq_num);
+                self.send_heartbeat().await;
                 self.flush_vc_wait_buffer().await;
             },
             SequencerCommand::MakeNewBlock => {

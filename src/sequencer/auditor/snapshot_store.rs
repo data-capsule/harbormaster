@@ -85,7 +85,7 @@ impl _SnapshotStore {
     }
 
     /// Prune all snapshots <= vc.
-    pub fn prune_snapshots(&self, vc: &VectorClock) {
+    pub fn prune_lesser_snapshots(&self, vc: &VectorClock) {
         for mapref in self.store.iter_mut() {
             let val_ref = mapref.value();
             val_ref.values.retain(|test_vc, _| {
@@ -99,6 +99,27 @@ impl _SnapshotStore {
 
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
+    }
+
+    pub fn prune_concurrent_snapshots(&self, vcs: &Vec<&VectorClock>) {
+        for mapref in self.store.iter_mut() {
+            let val_ref = mapref.value();
+            val_ref.values.retain(|test_vc, _| {
+                !Self::__all_concurrent(test_vc, vcs)
+            });
+        }
+
+        self.log.retain(|test_vc| {
+            !Self::__all_concurrent(test_vc, vcs)
+        });
+
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+    }
+
+    fn __all_concurrent(vc: &VectorClock, vcs: &Vec<&VectorClock>) -> bool {
+        vcs.iter().all(|test_vc| {
+            !(vc <= *test_vc || *test_vc <= vc)
+        })
     }
 
     pub fn size(&self) -> usize {
