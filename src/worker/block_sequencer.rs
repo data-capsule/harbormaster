@@ -568,7 +568,7 @@ impl BlockSequencer {
     }
     
     fn _flush_vc_wait_buffer(&mut self, target_vc: VectorClock) {
-        let i_was_blocked = self.vc_wait_buffer.len() > 0;
+        // let i_was_blocked = self.vc_wait_buffer.len() > 0;
         let mut to_remove = Vec::new();
         for (vc, _) in self.vc_wait_buffer.iter() {
             if target_vc >= *vc {
@@ -582,24 +582,24 @@ impl BlockSequencer {
                 let _ = sender.send(());
             }
         }
-        let i_am_blocked = self.vc_wait_buffer.len() > 0;
+        // let i_am_blocked = self.vc_wait_buffer.len() > 0;
 
-        if i_was_blocked && !i_am_blocked {
-            warn!("Unblocked");
-        }
+        // if i_was_blocked && !i_am_blocked {
+        //     warn!("Unblocked");
+        // }
     }
 
     async fn buffer_vc_wait(&mut self, vc: VectorClock, sender: oneshot::Sender<()>) {
-        let i_was_blocked = self.vc_wait_buffer.len() > 0;
+        // let i_was_blocked = self.vc_wait_buffer.len() > 0;
         let buffer = self.vc_wait_buffer.entry(vc).or_insert(Vec::new());
         buffer.push(sender);
 
         self.flush_vc_wait_buffer().await;
-        let i_am_blocked = self.vc_wait_buffer.len() > 0;
+        // let i_am_blocked = self.vc_wait_buffer.len() > 0;
 
-        if !i_was_blocked && i_am_blocked {
-            warn!("Blocked");
-        }
+        // if !i_was_blocked && i_am_blocked {
+        //     warn!("Blocked");
+        // }
     }
 }
 

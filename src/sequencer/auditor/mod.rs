@@ -2,7 +2,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use log::info;
 use nix::libc::IFLA_MIN_MTU;
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
 use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::auditor::{per_worker_auditor::PerWorkerAuditor, snapshot_store::SnapshotStore}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::VectorClock};
 
@@ -15,7 +15,7 @@ pub struct Auditor {
     snapshot_store: SnapshotStore,
 
     block_rx: Receiver<CachedBlock>,
-    gc_rx: Receiver<(String, VectorClock)>,
+    gc_rx: UnboundedReceiver<(String, VectorClock)>,
 
     per_worker_auditor_txs: Vec<Sender<CachedBlock>>,
     per_worker_auditors: Vec<Arc<Mutex<PerWorkerAuditor>>>,
@@ -33,7 +33,7 @@ impl Auditor {
             .filter(|name| name.starts_with("node"));
 
         let gc_vcs = all_worker_names.clone().map(|name| (name.clone(), VectorClock::new())).collect();
-        let (gc_tx, gc_rx) = make_channel(_chan_depth);
+        let (gc_tx, gc_rx) = unbounded_channel();
 
         let mut per_worker_auditor_txs = Vec::new();
 
@@ -84,6 +84,17 @@ impl Auditor {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
+        let gc_rx_pending = self.gc_rx.len();
+        if gc_rx_pending > 0 {
+            let mut gc_rx_buffer = Vec::with_capacity(gc_rx_pending);
+            self.gc_rx.recv_many(&mut gc_rx_buffer, gc_rx_pending).await;
+            for (worker_name, read_vc) in gc_rx_buffer {
+                self.handle_gc(worker_name, read_vc).await;
+            }
+
+            return Ok(());
+        }
+            
         tokio::select! {
             _ = self.log_timer.wait() => {
                 self.log_stats().await;
@@ -104,7 +115,6 @@ impl Auditor {
     }
 
     async fn handle_block(&mut self, block: CachedBlock) {
-        
         for tx in self.per_worker_auditor_txs.iter() {
             tx.send(block.clone()).await.unwrap();
         }

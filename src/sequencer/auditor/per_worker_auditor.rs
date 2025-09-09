@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
 use log::info;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Mutex};
 
 use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::auditor::snapshot_store::SnapshotStore, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::VectorClock};
 
@@ -9,7 +9,7 @@ pub struct PerWorkerAuditor {
     config: AtomicConfig,
     worker_name: String,
     block_rx: Receiver<CachedBlock>,
-    gc_tx: Sender<(String, VectorClock)>,
+    gc_tx: UnboundedSender<(String, VectorClock)>,
     snapshot_store: SnapshotStore,
 
     /// For each origin, all blocks committed and to be used for snapshot.
@@ -28,7 +28,7 @@ pub struct PerWorkerAuditor {
 }
 
 impl PerWorkerAuditor {
-    pub fn new(config: AtomicConfig, worker_name: String, block_rx: Receiver<CachedBlock>, gc_tx: Sender<(String, VectorClock)>, snapshot_store: SnapshotStore) -> Self {
+    pub fn new(config: AtomicConfig, worker_name: String, block_rx: Receiver<CachedBlock>, gc_tx: UnboundedSender<(String, VectorClock)>, snapshot_store: SnapshotStore) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
 
         let _config = config.get();
@@ -132,7 +132,8 @@ impl PerWorkerAuditor {
 
         // TODO: Actually verify the reads.
 
-        self.gc_tx.send((self.worker_name.clone(), read_vc.clone())).await.unwrap();
+        // This is unbounded so as to not cause deadlock.
+        self.gc_tx.send((self.worker_name.clone(), read_vc.clone())).unwrap();
 
     }
     

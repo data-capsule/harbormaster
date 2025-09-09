@@ -1,7 +1,7 @@
 use std::{pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use hashbrown::HashMap;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use num_bigint::{BigInt, Sign};
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, oneshot::{self, error::RecvError}, Mutex};
@@ -313,7 +313,7 @@ impl CacheManager {
             },
 
             Some(Ok(_)) = Self::check_block_on_vc_wait(&mut self.blocked_on_vc_wait) => {
-                warn!("VC wait cleared");
+                trace!("VC wait cleared");
                 self.blocked_on_vc_wait = None;
             },
             Some(Ok(_)) = Self::check_block_on_read_snapshot(&mut self.block_on_read_snapshot) => {
@@ -423,7 +423,7 @@ impl CacheManager {
     }
 
     async fn handle_sequencer_request(&mut self, mut tx: ProtoTransaction) {
-        error!("Handling sequencer request: {:?}", tx);
+        trace!("Handling sequencer request: {:?}", tx);
         for op in tx.on_receive.as_mut().unwrap().ops.drain(..) {
             match op.op_type() {
                 ProtoTransactionOpType::BlockIndefinitely => {
