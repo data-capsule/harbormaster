@@ -2,6 +2,7 @@ mod commit_buffer;
 mod auditor;
 mod controller;
 mod lockserver;
+mod heartbeat_handler;
 
 
 use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
@@ -10,7 +11,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::{ProtoAppendEntries, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, lockserver::{LockServer, LockServerCommand}}, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::{ProtoAppendEntries, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}}, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
 use crate::storage_server::fork_receiver::ForkReceiver;
 use crate::storage_server::staging::Staging;
 
@@ -133,6 +134,7 @@ pub struct SequencerNode {
     auditor: Arc<Mutex<Auditor>>,
     lock_server: Arc<Mutex<LockServer>>,
     controller: Arc<Mutex<Controller>>,
+    heartbeat_handler: Arc<Mutex<HeartbeatHandler>>,
 }
 
 impl SequencerNode {
@@ -185,18 +187,24 @@ impl SequencerNode {
         let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, fork_receiver_cmd_tx, None, false);
         let commit_buffer = CommitBuffer::new(config.clone(), logserver_rx, auditor_tx);
 
+        let (unused_heartbeat_tx, unused_heartbeat_rx) = make_channel(_chan_depth);
 
         let (auditor_controller_tx, auditor_controller_rx) = make_channel(_chan_depth);
-        let auditor = Auditor::new(config.clone(), auditor_rx, auditor_controller_tx, heartbeat_rx, true);
+        
+        let auditor = Auditor::new(config.clone(), auditor_rx, auditor_controller_tx, unused_heartbeat_rx, true);
 
-        // Since this client fires Transactions, it needs to be full duplex.
-        // The other side will try to send a reply.
-        let controller_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
-        let controller = Controller::new(config.clone(), controller_client.into(), auditor_controller_rx);
 
         let (lock_server_controller_tx, lock_server_controller_rx) = make_channel(_chan_depth);
         let lock_server = LockServer::new(config.clone(), lock_server_rx, lock_server_controller_tx);
-    
+        
+        let (heartbeat_handler_controller_tx, heartbeat_handler_controller_rx) = make_channel(_chan_depth);
+        let heartbeat_handler = HeartbeatHandler::new(config.clone(), heartbeat_rx, heartbeat_handler_controller_tx);
+        
+        // Since this client fires Transactions, it needs to be full duplex.
+        // The other side will try to send a reply.
+        let controller_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
+        let controller = Controller::new(config.clone(), controller_client.into(), heartbeat_handler_controller_rx);
+
         Self {
             config,
             keystore,
@@ -209,6 +217,7 @@ impl SequencerNode {
             auditor: Arc::new(Mutex::new(auditor)),
             controller: Arc::new(Mutex::new(controller)),
             lock_server: Arc::new(Mutex::new(lock_server)),
+            heartbeat_handler: Arc::new(Mutex::new(heartbeat_handler)),
         }
 
     }
@@ -224,6 +233,7 @@ impl SequencerNode {
         let auditor = self.auditor.clone();
         let controller = self.controller.clone();
         let lock_server = self.lock_server.clone();
+        let heartbeat_handler = self.heartbeat_handler.clone();
 
         handles.spawn(async move {
             let mut storage = storage.lock().await;
@@ -244,16 +254,18 @@ impl SequencerNode {
         handles.spawn(async move {
             CommitBuffer::run(commit_buffer).await;
         });
-        handles.spawn(async move {
-            Auditor::run(auditor).await;
-        });
+        // handles.spawn(async move {
+        //     Auditor::run(auditor).await;
+        // });
         handles.spawn(async move {
             Controller::run(controller).await;
         });
         handles.spawn(async move {
             LockServer::run(lock_server).await;
         });
-
+        handles.spawn(async move {
+            HeartbeatHandler::run(heartbeat_handler).await;
+        });
         handles
     }
 }

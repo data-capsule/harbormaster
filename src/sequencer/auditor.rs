@@ -149,7 +149,7 @@ impl Auditor {
         }
 
         while let Ok(force_audit) = auditor.handle_inputs().await {
-            if force_audit || auditor.should_audit() {
+            if force_audit {
                 auditor.do_audit().await;
             }
         }
@@ -219,15 +219,15 @@ impl Auditor {
                     let BlockWithSeqNum(_, block_stats, _) = queue.peek().unwrap();
                     Some((origin.clone(), block_stats.read_vc.clone()))
                 }).collect::<HashMap<_, _>>();
-                error!("Read VCs: {:?}, Snapshot GLB: {:?}", read_vcs, self.get_snapshot_vc_glb());
+                trace!("Read VCs: {:?}, Snapshot GLB: {:?}. No snapshot can be generated for the read vc.", read_vcs, self.get_snapshot_vc_glb());
 
-                self.throw_error("No snapshot can be generated for the read vc.").await;
+                // self.throw_error("No snapshot can be generated for the read vc.").await;
                 return;
             }
 
             trace!("Next target: {}, Cost: {}, Base VC: {}", next_target, cost, base_vc);
 
-
+            self.update_frontier_cut().await;
 
             let BlockWithSeqNum(_, block_stats, block) = self.unaudited_buffer.get_mut(next_target).unwrap()
                 .pop().unwrap();
@@ -238,11 +238,8 @@ impl Auditor {
             self.derive_snapshot(&block_stats.read_vc, &base_vc).await;
 
             self.verify_reads(&block_stats, &block).await;
-            self.update_frontier_cut().await;
 
-            self.apply_updates(&block_stats, &block).await;
-            
-        
+            // self.cleanup_old_snapshots().await;        
         }
 
         self.cleanup_old_snapshots().await;
@@ -251,6 +248,7 @@ impl Auditor {
     }
 
     async fn handle_block(&mut self, block_stats: BlockStats, block: CachedBlock) {
+        self.apply_updates(&block_stats, &block).await;
         self.committed_vc.advance(SenderType::Auth(block_stats.origin.clone(), 0), block_stats.seq_num);
         self.unaudited_buffer
             .entry(block_stats.origin.clone())
@@ -277,34 +275,34 @@ impl Auditor {
 
     async fn cleanup_old_snapshots(&mut self) {
         // Remove all snapshots such that their vc is strictly less than all vcs in frontier_cut.
-        // self.snapshot_vcs.retain(|snapshot_vc| {
-        //     let res = self.frontier_cut.iter()
-        //         .all(|(_, read_vc)| {
-        //             debug!("Snapshot VC: {}, Read VC: {}. Result: {}", snapshot_vc, read_vc, *snapshot_vc < *read_vc);
-        //             *snapshot_vc < *read_vc
-        //         });
-
-        //     trace!("Snapshot VC: {}, Result: {}", snapshot_vc, res);
-
-        //     !res
-        // });
-
-        // // Remove all snapshots that are concurrent with all vcs in frontier_cut.
-        // self.snapshot_vcs.retain(|snapshot_vc| {
-        //     let res = self.frontier_cut.iter()
-        //         .all(|(_, read_vc)| {
-        //             !(*snapshot_vc <= *read_vc || *read_vc <= *snapshot_vc)
-        //         });
-
-        //     !res
-        // });
-
         self.snapshot_vcs.retain(|snapshot_vc| {
-            self.frontier_cut.iter()
-                .any(|(_, read_vc)| {
-                    *snapshot_vc >= *read_vc
-                })
+            let res = self.frontier_cut.iter()
+                .all(|(_, read_vc)| {
+                    debug!("Snapshot VC: {}, Read VC: {}. Result: {}", snapshot_vc, read_vc, *snapshot_vc < *read_vc);
+                    *snapshot_vc < *read_vc
+                });
+
+            trace!("Snapshot VC: {}, Result: {}", snapshot_vc, res);
+
+            !res
         });
+
+        // Remove all snapshots that are concurrent with all vcs in frontier_cut.
+        self.snapshot_vcs.retain(|snapshot_vc| {
+            let res = self.frontier_cut.iter()
+                .all(|(_, read_vc)| {
+                    !(*snapshot_vc <= *read_vc || *read_vc <= *snapshot_vc)
+                });
+
+            !res
+        });
+
+        // self.snapshot_vcs.retain(|snapshot_vc| {
+        //     self.frontier_cut.iter()
+        //         .any(|(_, read_vc)| {
+        //             *snapshot_vc >= *read_vc
+        //         })
+        // });
 
     }
 
