@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, pin::Pin, sync::Arc, time::Duration};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use rand::seq::IteratorRandom;
 use tokio::sync::Mutex;
 
@@ -75,7 +75,7 @@ impl HeartbeatHandler {
         
         
         let diameter = self.get_snapshot_lattice_diameter();
-        error!("Heartbeat VCs: {:?}. Unique heartbeat VCs: {}, Diameter: {}", self.heartbeat_vcs, unique_heartbeat_vcs.len(), diameter);
+        trace!("Heartbeat VCs: {:?}. Unique heartbeat VCs: {}, Diameter: {}", self.heartbeat_vcs, unique_heartbeat_vcs.len(), diameter);
 
         let blocking_criteria = diameter > self.config.get().consensus_config.max_audit_snapshots;
         let unblocking_criteria = diameter <= self.config.get().consensus_config.max_audit_snapshots;
@@ -171,6 +171,9 @@ impl HeartbeatHandler {
     }
 
     async fn log_stats(&mut self) {
-        info!("Heartbeat VCs: {:?}", self.heartbeat_vcs);
+        info!("Heartbeat VCs: {:?} Diameter: {} Unique: {}",
+            self.heartbeat_vcs, self.get_snapshot_lattice_diameter(),
+            self.heartbeat_vcs.values().cloned().collect::<HashSet<_>>().len()
+        );
     }
 }

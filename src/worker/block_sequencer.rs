@@ -250,7 +250,7 @@ pub struct BlockSequencer {
     snapshot_propagated_signal_tx: Vec<oneshot::Sender<()>>,
 
     last_heartbeat_time: Instant,
-    __i_was_blocked_once: bool,
+    __num_times_blocked: usize,
 }
 
 impl BlockSequencer {
@@ -279,7 +279,7 @@ impl BlockSequencer {
             snapshot_propagated_signal_tx: Vec::new(),
             __vc_dirty: false,
             last_heartbeat_time: Instant::now(),
-            __i_was_blocked_once: false,
+            __num_times_blocked: 0,
         }
     }
 
@@ -303,7 +303,7 @@ impl BlockSequencer {
     }
 
     async fn log_stats(&mut self) {
-        info!("Vector Clock: {}", self.curr_vector_clock);
+        info!("Vector Clock: {}, Blocked times: {}", self.curr_vector_clock, self.__num_times_blocked);
     }
 
     async fn handle_command(&mut self, command: SequencerCommand) {
@@ -350,7 +350,7 @@ impl BlockSequencer {
             },
             SequencerCommand::WaitForVC(vc, sender) => {
                 self.buffer_vc_wait(vc, sender).await;
-                self.__i_was_blocked_once = true;
+                self.__num_times_blocked += 1;
             }
             SequencerCommand::UnblockVC(vc) => {
                 self._flush_vc_wait_buffer(vc);
@@ -380,10 +380,6 @@ impl BlockSequencer {
     }
 
     async fn force_prepare_new_block(&mut self) {
-        if self.__i_was_blocked_once {
-            warn!("I was blocked once");
-        }
-
         // Force to send null blocks if needed.
         trace!("Force preparing new block. VC dirty: {} , all_write_op_bag: {}, self_write_op_bag: {}, self_read_op_bag: {}",
             self.__vc_dirty, self.all_write_op_bag.len(), self.self_write_op_bag.len(), self.self_read_op_bag.len());
