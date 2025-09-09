@@ -250,6 +250,7 @@ pub struct BlockSequencer {
     snapshot_propagated_signal_tx: Vec<oneshot::Sender<()>>,
 
     last_heartbeat_time: Instant,
+    __i_was_blocked_once: bool,
 }
 
 impl BlockSequencer {
@@ -278,6 +279,7 @@ impl BlockSequencer {
             snapshot_propagated_signal_tx: Vec::new(),
             __vc_dirty: false,
             last_heartbeat_time: Instant::now(),
+            __i_was_blocked_once: false,
         }
     }
 
@@ -348,6 +350,7 @@ impl BlockSequencer {
             },
             SequencerCommand::WaitForVC(vc, sender) => {
                 self.buffer_vc_wait(vc, sender).await;
+                self.__i_was_blocked_once = true;
             }
             SequencerCommand::UnblockVC(vc) => {
                 self._flush_vc_wait_buffer(vc);
@@ -377,6 +380,9 @@ impl BlockSequencer {
     }
 
     async fn force_prepare_new_block(&mut self) {
+        if self.__i_was_blocked_once {
+            warn!("I was blocked once");
+        }
 
         // Force to send null blocks if needed.
         trace!("Force preparing new block. VC dirty: {} , all_write_op_bag: {}, self_write_op_bag: {}, self_read_op_bag: {}",
