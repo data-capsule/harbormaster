@@ -8,6 +8,8 @@ use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequence
 mod snapshot_store;
 mod per_worker_auditor;
 
+const MAX_GC_COUNTER: usize = 10_000;
+
 pub struct Auditor {
     config: AtomicConfig,
     gc_vcs: HashMap<String, VectorClock>,
@@ -15,6 +17,7 @@ pub struct Auditor {
 
     block_rx: Receiver<CachedBlock>,
     gc_rx: UnboundedReceiver<(String, VectorClock)>,
+    gc_counter: usize,
 
     per_worker_auditor_txs: Vec<Sender<CachedBlock>>,
     per_worker_auditors: Vec<Arc<Mutex<PerWorkerAuditor>>>,
@@ -36,7 +39,7 @@ impl Auditor {
 
         let mut per_worker_auditor_txs = Vec::new();
 
-        let snapshot_store = SnapshotStore::new();
+        let snapshot_store = SnapshotStore::new(all_worker_names.clone().cloned().collect::<Vec<_>>());
         let per_worker_auditors = all_worker_names.clone().map(|name| {
             let (tx, rx) = make_channel(_chan_depth);
             per_worker_auditor_txs.push(tx);
@@ -62,6 +65,7 @@ impl Auditor {
             per_worker_auditors,
             per_worker_auditor_handles: JoinSet::new(),
             log_timer,
+            gc_counter: 0,
         }
     }
 
@@ -127,14 +131,21 @@ impl Auditor {
 
     async fn handle_gc(&mut self, worker_name: String, read_vc: VectorClock) {
         self.gc_vcs.insert(worker_name.clone(), read_vc);
+        self.gc_counter += 1;
+
+        if self.gc_counter < MAX_GC_COUNTER {
+            return;
+        }
 
         let min_vc = self.get_min_gc_vc();
 
-        self.snapshot_store.prune_lesser_snapshots(&min_vc);
+        self.snapshot_store.prune_lesser_snapshots(&min_vc).await;
         self.snapshot_store.prune_concurrent_snapshots(&self.gc_vcs.iter()
             .filter(|(_worker, _)| worker_name != **_worker)
             .map(|(_worker, vc)| vc)
-        .collect::<Vec<_>>(), &self.gc_vcs.values().collect::<Vec<_>>());
+        .collect::<Vec<_>>(), &self.gc_vcs.values().collect::<Vec<_>>()).await;
+
+        self.gc_counter = 0;
     }
 
     fn get_min_gc_vc(&self) -> VectorClock {

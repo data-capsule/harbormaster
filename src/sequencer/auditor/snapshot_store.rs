@@ -1,15 +1,25 @@
-use std::{ops::Deref, sync::{atomic::AtomicUsize, Arc}};
+use std::{collections::HashMap, ops::Deref, sync::{atomic::AtomicUsize, Arc}};
+use tokio::sync::RwLock;
 use dashmap::{DashMap, DashSet};
+use log::warn;
 use crate::worker::{block_sequencer::VectorClock, cache_manager::{CacheKey, CachedValue}};
 
 
 struct ValueLattice {
-    values: DashMap<VectorClock, CachedValue>,
+    values: HashMap<VectorClock, CachedValue>,
 }
+
+impl ValueLattice {
+    fn new() -> Self {
+        Self { values: HashMap::new() }
+    }
+}
+
 pub struct _SnapshotStore {
-    store: DashMap<CacheKey, ValueLattice>,
-    /// All VCs currently installed.
-    log: DashSet<VectorClock>,
+    /// worker name => snapshot store.
+    store: DashMap<String, RwLock<HashMap<CacheKey, ValueLattice>>>,
+    /// All VCs currently installed, reverse indexed by worker name.
+    log: DashMap<VectorClock, String>,
     /// All VCs that have been garbage collected.
     __ghost_log: DashSet<VectorClock>,
     __ghost_reborn_counter: AtomicUsize,
@@ -21,10 +31,12 @@ pub struct _SnapshotStore {
 pub struct SnapshotStore(Arc<_SnapshotStore>);
 
 impl SnapshotStore {
-    pub fn new() -> Self {
-        let log = DashSet::new();
-        log.insert(VectorClock::new());
-        Self(Arc::new(_SnapshotStore { store: DashMap::new(), log, __ghost_log: DashSet::new(), __ghost_reborn_counter: AtomicUsize::new(0) }))
+    pub fn new(worker_names: Vec<String>) -> Self {
+        let log = DashMap::new();
+        let store = worker_names.iter().map(|name| (name.clone(), RwLock::new(HashMap::new()))).collect();
+
+        log.insert(VectorClock::new(), worker_names[0].clone());
+        Self(Arc::new(_SnapshotStore { store, log, __ghost_log: DashSet::new(), __ghost_reborn_counter: AtomicUsize::new(0) }))
     }
 }
 
@@ -39,12 +51,17 @@ impl Deref for SnapshotStore {
 impl _SnapshotStore {
     pub fn snapshot_exists(&self, vc: &VectorClock) -> bool {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
-        self.log.contains(vc)
+        self.log.contains_key(vc)
+    }
+
+    fn snapshot_home_worker(&self, vc: &VectorClock) -> String {
+        self.log.get(vc).map(|mapref| mapref.value().clone()).unwrap()
     }
 
     pub fn find_glb(&self, vc: &VectorClock) -> Vec<VectorClock> {
         let lbs = self.log.iter()
-            .filter(|test_vc| {
+            .filter(|mapref| {
+                let test_vc = mapref.key();
                 let _cmp = test_vc.partial_cmp(vc);
                 match _cmp {
                     Some(std::cmp::Ordering::Less) => true,
@@ -52,7 +69,7 @@ impl _SnapshotStore {
                     _ => false,
                 }
             })
-            .map(|vc| vc.clone())
+            .map(|mapref| mapref.key().clone())
             .collect::<Vec<_>>();
 
         lbs.iter().filter(|test_vc| {
@@ -68,12 +85,16 @@ impl _SnapshotStore {
     }
 
     /// Returns value <= vc.
-    pub fn get(&self, key: &CacheKey, vc: &VectorClock) -> Option<CachedValue> {
+    pub async fn get(&self, key: &CacheKey, vc: &VectorClock) -> Option<CachedValue> {
         if !self.snapshot_exists(vc) {
             return None;
         }
 
-        let Some(value_lattice) = self.store.get(key) else {
+        let home_worker = self.snapshot_home_worker(vc);
+
+        let store = self.store.get(&home_worker).unwrap();
+        let store = store.read().await;
+        let Some(value_lattice) = store.get(key) else {
             return None;
         };
 
@@ -86,7 +107,7 @@ impl _SnapshotStore {
         // Find the greatest vc <= vc.
         let mut glb = None;
         for mapref in value_lattice.values.iter() {
-            let test_vc = mapref.key();
+            let test_vc = mapref.0; // mapref.key();
             if test_vc <= vc {
                 if glb.is_none() {
                     glb = Some(test_vc.clone());
@@ -103,32 +124,59 @@ impl _SnapshotStore {
         value_lattice.values.get(&glb).map(|val| val.clone())
     }
 
-    pub fn install_snapshot<T: IntoIterator<Item = (CacheKey, CachedValue)>>(&self, vc: VectorClock, updates: T) {
+    pub async fn install_snapshot<T: IntoIterator<Item = (CacheKey, CachedValue)>>(&self, vc: VectorClock, worker_name: String, updates: T) {
+        warn!("Installing snapshot: {}", vc);
+        let store = self.store.get(&worker_name).unwrap();
+        let mut store = store.write().await;
+        warn!("Lock acquired");
         for (key, value) in updates {
-            self.store.entry(key)
-                .or_insert(ValueLattice { values: DashMap::new() })
-                .values.insert(vc.clone(), value);
+            store.entry(key)
+                .or_insert(ValueLattice::new());
+                // .values.insert(vc.clone(), value);
         }
+        warn!("Installed snapshot: {}", vc);
 
         if self.__ghost_log.contains(&vc) {
             self.__ghost_reborn_counter.fetch_add(1, std::sync::atomic::Ordering::Release);
         }
 
         
-        self.log.insert(vc);
+        self.log.insert(vc, worker_name);
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
     }
 
     /// Prune all snapshots <= vc.
-    pub fn prune_lesser_snapshots(&self, vc: &VectorClock) {
-        for mapref in self.store.iter_mut() {
-            let val_ref = mapref.value();
-            val_ref.values.retain(|test_vc, _| {
-                !(test_vc < vc)
-            });
+    pub async fn prune_lesser_snapshots(&self, vc: &VectorClock) {
+        let to_remove = self.log.iter()
+            .filter(|mapref| {
+                let test_vc = mapref.key();
+                let res = !(test_vc < vc);
+                !res
+            })
+            .map(|mapref| (mapref.key().clone(), mapref.value().clone()))
+            .collect::<Vec<_>>();
+
+        let mut to_remove_home_workers_map = HashMap::new();
+        for (test_vc, home_worker) in to_remove {
+            to_remove_home_workers_map.entry(home_worker).or_insert(Vec::new()).push(test_vc);
         }
 
-        self.log.retain(|test_vc| {
+        for (home_worker, test_vcs) in to_remove_home_workers_map {
+            let store = self.store.get(&home_worker).unwrap();
+            let mut store = store.write().await;
+            for _vc in &test_vcs {
+                for mapref in store.iter_mut() {
+                    let val_ref = mapref.1; // mapref.value();
+                    val_ref.values.retain(|test_vc, _| {
+                        !(test_vc < _vc)
+                    });
+                }
+            }
+        }
+
+        
+
+        self.log.retain(|test_vc, _| {
             let res = !(test_vc < vc);
             if !res {
                 self.__ghost_log.insert(test_vc.clone());
@@ -140,15 +188,45 @@ impl _SnapshotStore {
 
     }
 
-    pub fn prune_concurrent_snapshots(&self, vcs: &Vec<&VectorClock>, upper_limits: &Vec<&VectorClock>) {
-        for mapref in self.store.iter_mut() {
-            let val_ref = mapref.value();
-            val_ref.values.retain(|test_vc, _| {
-                !Self::__all_concurrent(test_vc, vcs, upper_limits)
-            });
+    pub async fn prune_concurrent_snapshots(&self, vcs: &Vec<&VectorClock>, upper_limits: &Vec<&VectorClock>) {
+        let to_remove = self.log.iter()
+            .filter(|mapref| {
+                let test_vc = mapref.key();
+                let res = !Self::__all_concurrent(test_vc, vcs, upper_limits);
+                !res
+            })
+            .map(|mapref| (mapref.key().clone(), mapref.value().clone()))
+            .collect::<Vec<_>>();
+
+        
+        // let mut store = self.store.write().await;
+        // for mapref in store.iter_mut() {
+        //     let val_ref = mapref.1; // mapref.value();
+        //     val_ref.values.retain(|test_vc, _| {
+        //         !Self::__all_concurrent(test_vc, vcs, upper_limits)
+        //     });
+        // }
+
+        let mut to_remove_home_workers_map = HashMap::new();
+        for (test_vc, home_worker) in to_remove {
+            to_remove_home_workers_map.entry(home_worker).or_insert(Vec::new()).push(test_vc);
         }
 
-        self.log.retain(|test_vc| {
+        for (home_worker, test_vcs) in to_remove_home_workers_map {
+            let store = self.store.get(&home_worker).unwrap();
+            let mut store = store.write().await;
+            for _vc in &test_vcs {
+                for mapref in store.iter_mut() {
+                    let val_ref = mapref.1; // mapref.value();
+                    val_ref.values.retain(|test_vc, _| {
+                        !(test_vc < _vc)
+                    });
+                }
+            }
+        }
+
+
+        self.log.retain(|test_vc, _| {
             let res = !Self::__all_concurrent(test_vc, vcs, upper_limits);
             if !res {
                 self.__ghost_log.insert(test_vc.clone());

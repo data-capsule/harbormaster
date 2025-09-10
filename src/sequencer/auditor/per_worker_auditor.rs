@@ -1,9 +1,9 @@
 use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::ProtoBlock, rpc::SenderType, sequencer::auditor::snapshot_store::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{CacheKey, CachedValue}}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::ProtoBlock, rpc::SenderType, sequencer::auditor::snapshot_store::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{process_tx_op, CacheKey, CachedValue}}};
 
 #[allow(dead_code)]
 pub struct PerWorkerAuditor {
@@ -118,7 +118,7 @@ impl PerWorkerAuditor {
 
             if read_vc <= self.available_vc {
                 let block = self.unaudited_buffer.pop_front().unwrap();
-                self.do_audit_block(block, read_vc);
+                self.do_audit_block(block, read_vc).await;
                 audit_successful = true;
             } else {
                 break;
@@ -128,11 +128,13 @@ impl PerWorkerAuditor {
         audit_successful
     }
 
-    fn do_audit_block(&mut self, _block: CachedBlock, read_vc: VectorClock) {
+    async fn do_audit_block(&mut self, _block: CachedBlock, read_vc: VectorClock) {
         if !self.snapshot_store.snapshot_exists(&read_vc) {
             // TODO: Actually generate the updates.
             let updates = self.generate_updates(read_vc.clone());
-            self.snapshot_store.install_snapshot(read_vc.clone(), updates);
+            warn!("Generated updates: {}", updates.len());
+            // let updates = vec![];
+            self.snapshot_store.install_snapshot(read_vc.clone(), self.worker_name.clone(), updates).await;
             self.__snapshot_generated_counter += 1;
         } else {
             self.__snapshot_reused_counter += 1;
@@ -214,9 +216,19 @@ impl PerWorkerAuditor {
     }
 
     fn filter_write_ops(&self, block: &ProtoBlock) -> Vec<(CacheKey, CachedValue)> {
-        // TODO: Implement this.
-        vec![]
-    
+        let mut updates = Vec::new();
+        for tx in &block.tx_list {
+            if tx.on_crash_commit.is_none() {
+                continue;
+            }
+
+            let ops = tx.on_crash_commit.as_ref().unwrap();
+            for op in &ops.ops {
+                let Some((key, cached_value)) = process_tx_op(op) else { continue };
+                updates.push((key, cached_value));
+            }
+        }
+        updates
     }
     
 }
