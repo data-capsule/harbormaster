@@ -8,9 +8,6 @@ use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequence
 mod snapshot_store;
 mod per_worker_auditor;
 
-const MAX_GC_COUNTER: usize = 1_000;
-const MAX_GC_INTERVAL_MS: u64 = 1000;
-
 pub struct Auditor {
     config: AtomicConfig,
     gc_vcs: HashMap<String, VectorClock>,
@@ -56,7 +53,7 @@ impl Auditor {
         }).collect();
 
         let log_timer = ResettableTimer::new(Duration::from_millis(_config.app_config.logger_stats_report_ms));
-        let gc_timer = ResettableTimer::new(Duration::from_millis(MAX_GC_INTERVAL_MS));
+        let gc_timer = ResettableTimer::new(Duration::from_millis(_config.consensus_config.max_gc_interval_ms));
 
         Self {
             config,
@@ -141,7 +138,9 @@ impl Auditor {
         self.gc_vcs.insert(worker_name.clone(), read_vc);
         self.gc_counter += 1;
 
-        if self.gc_counter < MAX_GC_COUNTER {
+        let max_gc_counter = self.config.get().consensus_config.max_gc_counter;
+
+        if self.gc_counter < max_gc_counter {
             return;
         }
 

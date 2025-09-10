@@ -68,6 +68,9 @@ fn test_nodeconfig_serialize() {
         #[cfg(feature = "platforms")]
         liveness_u: 1,
 
+        max_gc_counter: 0,
+        max_gc_interval_ms: 0,
+
     };
 
     let app_config = AppConfig {
@@ -228,6 +231,10 @@ async fn test_atomic_config_access() {
 
         #[cfg(feature = "platforms")]
         liveness_u: 1,
+    
+        max_gc_counter: 0,
+        max_gc_interval_ms: 0,
+
     };
 
     let app_config = AppConfig {
