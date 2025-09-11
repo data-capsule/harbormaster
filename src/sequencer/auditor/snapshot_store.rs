@@ -120,6 +120,10 @@ impl _SnapshotStore {
             }
         }
 
+        if glb.is_none() {
+            return None;
+        }
+
         let glb = glb.unwrap();
         value_lattice.values.get(&glb).map(|val| val.clone())
     }

@@ -619,14 +619,18 @@ impl BlockSequencer {
     fn prepare_read_set(reads: Vec<(CacheKey, Option<CachedValue>)>) -> Vec<(CacheKey, HashType)> {
         reads.into_iter()
             .map(|(key, value)| {
-                let val_hash = match value {
-                    Some(value) => value.val_hash.to_bytes_be().1,
-                    None => vec![],
-                };
+                let val_hash = cached_value_to_val_hash(value);
                 (key, val_hash)
             })
             .sorted_by_key(|(key, _)| key.clone())
             .collect()
+    }
+}
+
+pub fn cached_value_to_val_hash(value: Option<CachedValue>) -> HashType {
+    match value {
+        Some(value) => value.val_hash.to_bytes_be().1,
+        None => vec![],
     }
 }
 

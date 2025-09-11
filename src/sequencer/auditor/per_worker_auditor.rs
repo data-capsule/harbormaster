@@ -1,9 +1,9 @@
 use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::{info, warn};
+use log::{error, info, warn};
 use tokio::sync::{mpsc::UnboundedSender, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::ProtoBlock, rpc::SenderType, sequencer::auditor::snapshot_store::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{process_tx_op, CacheKey, CachedValue}}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::{ProtoBlock, ProtoReadSet, ProtoReadSetEntry}, rpc::SenderType, sequencer::auditor::snapshot_store::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, VectorClock}, cache_manager::{process_tx_op, CacheKey, CachedValue}}};
 
 #[allow(dead_code)]
 pub struct PerWorkerAuditor {
@@ -128,7 +128,7 @@ impl PerWorkerAuditor {
         audit_successful
     }
 
-    async fn do_audit_block(&mut self, _block: CachedBlock, read_vc: VectorClock) {
+    async fn do_audit_block(&mut self, block: CachedBlock, read_vc: VectorClock) {
         if !self.snapshot_store.snapshot_exists(&read_vc) {
             let updates = self.generate_updates(read_vc.clone());
             // let updates = vec![];
@@ -138,7 +138,16 @@ impl PerWorkerAuditor {
             self.__snapshot_reused_counter += 1;
         }
 
-        // TODO: Actually verify the reads.
+        match &block.block.read_set {
+            Some(read_set) => {
+                self.verify_reads(read_set, &read_vc).await;
+            },
+            None => {
+                // No reads to verify.
+            },
+        }
+
+
 
         // This is unbounded so as to not cause deadlock.
 
@@ -227,6 +236,22 @@ impl PerWorkerAuditor {
             }
         }
         updates
+    }
+
+
+    /// Precondition: The snapshot wrt read_vc already exists in the snapshot store and is not GCed.
+    async fn verify_reads(&mut self, read_set: &ProtoReadSet, read_vc: &VectorClock) {
+        for ProtoReadSetEntry { key, value_hash } in &read_set.entries {
+            let correct_value = self.snapshot_store.get(key, read_vc).await;
+            let correct_value_hash = cached_value_to_val_hash(correct_value);
+            if *value_hash != correct_value_hash {
+                let key_str = String::from_utf8(key.clone()).unwrap();
+                let correct_value_hex_str = hex::encode(correct_value_hash);
+                let value_hex_str = hex::encode(value_hash);
+                error!("Read verification failed for key: {} correct_value_hash: {} value_hash: {}",
+                    key_str, correct_value_hex_str, value_hex_str);
+            }
+        }
     }
     
 }
