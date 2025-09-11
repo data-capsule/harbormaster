@@ -27,6 +27,7 @@ pub enum SequencerCommand {
     SelfReadOp {
         key: CacheKey,
         value: Option<CachedValue>, // Could be None if the key was not found.
+        is_dirty: bool, // The answer to the read op is from my own write. No need to log this.
         snapshot_propagated_signal_tx: Option<oneshot::Sender<()>>,
     },
 
@@ -319,8 +320,10 @@ impl BlockSequencer {
                     }
                 }
             },
-            SequencerCommand::SelfReadOp { key, value, snapshot_propagated_signal_tx } => {
-                self.self_read_op_bag.push((key, value));
+            SequencerCommand::SelfReadOp { key, value, is_dirty, snapshot_propagated_signal_tx } => {
+                if !is_dirty {
+                    self.self_read_op_bag.push((key, value));
+                }
                 if let Some(tx) = snapshot_propagated_signal_tx {
                     self.snapshot_propagated_signal_tx.push(tx);
                 }
