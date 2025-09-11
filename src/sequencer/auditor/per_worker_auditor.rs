@@ -139,9 +139,11 @@ impl PerWorkerAuditor {
             self.__snapshot_reused_counter += 1;
         }
 
+        let write_ops = self.filter_write_ops(&block.block);
+
         match &block.block.read_set {
             Some(read_set) => {
-                self.verify_reads(read_set, &read_vc).await;
+                self.verify_reads(read_set, &read_vc, &write_ops).await;
             },
             None => {
                 // No reads to verify.
@@ -262,7 +264,7 @@ impl PerWorkerAuditor {
 
 
     /// Precondition: The snapshot wrt read_vc already exists in the snapshot store and is not GCed.
-    async fn verify_reads(&mut self, read_set: &ProtoReadSet, read_vc: &VectorClock) {
+    async fn verify_reads(&mut self, read_set: &ProtoReadSet, read_vc: &VectorClock, write_ops: &HashMap<CacheKey, CachedValue>) {
         for ProtoReadSetEntry { key, value_hash } in &read_set.entries {
             let correct_value = self.snapshot_store.get(key, read_vc).await;
             let correct_value_hash = cached_value_to_val_hash(correct_value);
@@ -270,8 +272,13 @@ impl PerWorkerAuditor {
                 let key_str = String::from_utf8(key.clone()).unwrap();
                 let correct_value_hex_str = &hex::encode(correct_value_hash);
                 let value_hex_str = &hex::encode(value_hash);
-                error!("❌ Read verification failed for key: {} correct_value_hash: {} value_hash: {} read_vc: {}",
-                    key_str, correct_value_hex_str, value_hex_str, read_vc);
+
+                let value_in_curr_block = write_ops.get(key).cloned();
+                let value_hash_in_curr_block = cached_value_to_val_hash(value_in_curr_block);
+                let value_hash_in_curr_block_str = &hex::encode(value_hash_in_curr_block);
+
+                error!("❌ Read verification failed for key: {} correct_value_hash: {} value_hash: {} read_vc: {} value_hash_in_curr_block: {}, matches? {}",
+                    key_str, correct_value_hex_str, value_hex_str, read_vc, value_hash_in_curr_block_str, value_hash_in_curr_block_str == value_hex_str);
 
                 // if correct_value_hex_str.is_empty() {
                     // panic!("Read verification failed");

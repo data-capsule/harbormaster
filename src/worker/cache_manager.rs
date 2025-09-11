@@ -194,7 +194,6 @@ pub struct CacheManager {
     block_sequencer_tx: Sender<SequencerCommand>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     cache: HashMap<CacheKey, CachedValue>,
-    dirty_keys: HashSet<CacheKey>,
 
     last_committed_seq_num: u64,
     batch_timer: Arc<Pin<Box<ResettableTimer>>>,
@@ -226,7 +225,6 @@ impl CacheManager {
             block_sequencer_tx,
             fork_receiver_cmd_tx,
             cache: HashMap::new(),
-            dirty_keys: HashSet::new(),
 
             last_committed_seq_num: 0,
             batch_timer,
@@ -321,7 +319,6 @@ impl CacheManager {
             },
             Some(Ok(_)) = Self::check_block_on_read_snapshot(&mut self.block_on_read_snapshot) => {
                 self.block_on_read_snapshot = None;
-                self.dirty_keys.clear();
                 // warn!("Snapshot cleared");
             },
             Some(command) = Self::check_command_rx(&mut self.command_rx, block_on_vc_wait_is_some) => {
@@ -384,15 +381,12 @@ impl CacheManager {
                     Some(tx)
                 };
 
-                let is_dirty = self.dirty_keys.contains(&key);
-
                 // On the first read op of the block, the snapshot is fixed.
                 // Henceforth, all reads are based on this snapshot.
                 // Until the block sequencer proposes the new block. After that, the snapshot can be updated.
                 let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
                     key,
                     value: res.map(|v| v.clone()),
-                    is_dirty,
                     snapshot_propagated_signal_tx
                 }).await;
                 // warn!("Snapshot set");
@@ -400,7 +394,6 @@ impl CacheManager {
                 // TODO: Fill from checkpoint if key not found.
             }
             CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
-                self.dirty_keys.insert(key.clone());
                 
                 if self.cache.contains_key(&key) {
                     let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
@@ -509,16 +502,14 @@ impl CacheManager {
                 let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC { sender, block_seq_num: entry.seq_num }).await;
             }
         }
-
+        
         if !name.contains("god") {
             let block_seq_num = block.block.n;
             let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
                 sender: sender.clone(),
                 block_seq_num,
             }).await;
-            
-            
-            
+        
             // A new block can be formed now.
             self.last_batch_time = Instant::now();
             let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock).await;

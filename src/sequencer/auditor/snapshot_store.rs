@@ -143,6 +143,8 @@ impl _SnapshotStore {
             return None;
         }
 
+        warn!("Glb: {:?} Glb home: {:?} key: {} vc: {}", glb, glb_home, String::from_utf8(key.clone()).unwrap(), vc);
+
         {
             let store = self.store.get(&glb_home.unwrap()).unwrap();
             let store = store.read().await;

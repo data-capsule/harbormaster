@@ -1,4 +1,4 @@
-use std::{fmt::{self, Debug, Display}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::{Duration, Instant}};
+use std::{collections::HashSet, fmt::{self, Debug, Display}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use hashbrown::HashMap;
 use itertools::Itertools;
@@ -27,7 +27,6 @@ pub enum SequencerCommand {
     SelfReadOp {
         key: CacheKey,
         value: Option<CachedValue>, // Could be None if the key was not found.
-        is_dirty: bool, // The answer to the read op is from my own write. No need to log this.
         snapshot_propagated_signal_tx: Option<oneshot::Sender<()>>,
     },
 
@@ -231,6 +230,7 @@ pub struct BlockSequencer {
     curr_block_seq_num: u64,
     last_block_hash: FutureHash,
     self_write_op_bag: Vec<(CacheKey, CachedValue)>,
+    dirty_keys: HashSet<CacheKey>,
     all_write_op_bag: Vec<(CacheKey, CachedValue)>,
     self_read_op_bag: Vec<(CacheKey, Option<CachedValue>)>,
 
@@ -268,6 +268,7 @@ impl BlockSequencer {
             curr_block_seq_num: 0,
             last_block_hash: FutureHash::Immediate(default_hash()),
             self_write_op_bag: Vec::new(),
+            dirty_keys: HashSet::new(),
             all_write_op_bag: Vec::new(),
             self_read_op_bag: Vec::new(),
             curr_vector_clock: VectorClock::new(),
@@ -311,7 +312,8 @@ impl BlockSequencer {
         match command {
             SequencerCommand::SelfWriteOp { key, value, seq_num_query } => {
                 self.self_write_op_bag.push((key.clone(), value.clone()));
-                self.all_write_op_bag.push((key, value));
+                self.all_write_op_bag.push((key.clone(), value));
+                self.dirty_keys.insert(key);
 
                 match seq_num_query {
                     BlockSeqNumQuery::DontBother => {}
@@ -320,8 +322,8 @@ impl BlockSequencer {
                     }
                 }
             },
-            SequencerCommand::SelfReadOp { key, value, is_dirty, snapshot_propagated_signal_tx } => {
-                if !is_dirty {
+            SequencerCommand::SelfReadOp { key, value, snapshot_propagated_signal_tx } => {
+                if !self.dirty_keys.contains(&key) {
                     self.self_read_op_bag.push((key, value));
                 }
                 if let Some(tx) = snapshot_propagated_signal_tx {
@@ -329,6 +331,12 @@ impl BlockSequencer {
                 }
             },
             SequencerCommand::OtherWriteOp { key, value } => {
+                
+                // All OtherWriteOps come before any SelfReadOp for a given block.
+                // If I have SelfWriteOp(x) <-- OtherWriteOp(x) <-- SelfReadOp(x),
+                // I want to unmark x as dirty.
+                self.dirty_keys.remove(&key);
+                
                 self.all_write_op_bag.push((key, value));
             },
             SequencerCommand::AdvanceVC { sender, block_seq_num } => {
@@ -482,6 +490,7 @@ impl BlockSequencer {
             origin,
             self.chain_id,
         );
+        self.dirty_keys.clear();
 
 
         let (all_writes_rx, _, _) = self.crypto.prepare_block(
