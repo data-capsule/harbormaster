@@ -98,12 +98,10 @@ impl _SnapshotStore {
     
             let store = self.store.get(&home_worker).unwrap();
             let store = store.read().await;
-            let Some(value_lattice) = store.get(key) else {
-                return None;
-            };
-    
-            if let Some(val) = value_lattice.values.get(vc) {
-                return Some(val.clone());
+            if let Some(value_lattice) = store.get(key) {
+                if let Some(val) = value_lattice.values.get(vc) {
+                    return Some(val.clone());
+                }
             }
         }
 
