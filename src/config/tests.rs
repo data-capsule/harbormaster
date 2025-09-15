@@ -81,6 +81,7 @@ fn test_nodeconfig_serialize() {
     let evil_config = EvilConfig {
         simulate_byzantine_behavior: true,
         byzantine_start_block: 20000,
+        rollbacked_response_ratio: 0.0,
     };
 
     let config = Config {
@@ -245,6 +246,7 @@ async fn test_atomic_config_access() {
     let evil_config = EvilConfig {
         simulate_byzantine_behavior: true,
         byzantine_start_block: 20000,
+        rollbacked_response_ratio: 0.0,
     };
 
     let config = Config {

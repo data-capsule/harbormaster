@@ -3,6 +3,8 @@ use std::{collections::HashSet, pin::Pin, sync::Arc, time::{Duration, Instant}};
 use hashbrown::HashMap;
 use log::{error, info, trace, warn};
 use num_bigint::{BigInt, Sign};
+#[cfg(feature = "evil")]
+use rand::distributions::{Distribution, WeightedIndex};
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, oneshot::{self, error::RecvError}, Mutex};
 use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, BlockSeqNumQuery, VectorClock}, TxWithAckChanTag}};
@@ -204,6 +206,16 @@ pub struct CacheManager {
 
     blocked_on_vc_wait: Option<oneshot::Receiver<()>>,
     block_on_read_snapshot: Option<oneshot::Receiver<()>>,
+
+
+    #[cfg(feature = "evil")]
+    __evil_weights: [(bool, f64); 2],
+    #[cfg(feature = "evil")]
+    __evil_dist: WeightedIndex<f64>,
+    #[cfg(feature = "evil")]
+    __evil_count: usize,
+    #[cfg(feature = "evil")]
+    __good_count: usize,
 }
 
 impl CacheManager {
@@ -218,6 +230,11 @@ impl CacheManager {
         let batch_timer = ResettableTimer::new(Duration::from_millis(config.get().worker_config.batch_max_delay_ms));
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         
+        #[cfg(feature = "evil")]
+        let __evil_weights = [(false, 1.0 - config.get().evil_config.rollbacked_response_ratio), (true, config.get().evil_config.rollbacked_response_ratio)];
+        #[cfg(feature = "evil")]
+        let __evil_dist = WeightedIndex::new(__evil_weights.iter().map(|(_, weight)| weight)).unwrap();
+
         Self {
             config,
             command_rx,
@@ -234,6 +251,15 @@ impl CacheManager {
             log_timer,
             blocked_on_vc_wait: None,
             block_on_read_snapshot: None,
+
+            #[cfg(feature = "evil")]
+            __evil_weights,
+            #[cfg(feature = "evil")]
+            __evil_dist,
+            #[cfg(feature = "evil")]
+            __evil_count: 0,
+            #[cfg(feature = "evil")]
+            __good_count: 0,
         }
     }
 
@@ -368,12 +394,55 @@ impl CacheManager {
             max_seq_num, String::from_utf8(max_key.clone()).unwrap_or(hex::encode(max_key)),
             max2_seq_num, String::from_utf8(max2_key.clone()).unwrap_or(hex::encode(max2_key))
         );
+
+        #[cfg(feature = "evil")]
+        {
+            info!("😈 Rolled back responses: {}", self.__evil_count);
+            info!("😇 Good responses: {}", self.__good_count);
+        }
+
+    }
+
+    fn maybe_respond_with_rolledback_state<'a>(&self, res: Option<&'a CachedValue>, key: &CacheKey) -> (Option<&'a CachedValue>, bool) {
+        #[cfg(not(feature = "evil"))]
+        return res;
+
+        #[cfg(feature = "evil")]
+        {
+            use rand::thread_rng;
+
+            let config = &self.config.get().evil_config;
+
+            let should_respond_with_rolledback_state = if config.simulate_byzantine_behavior && config.rollbacked_response_ratio > 0.000000001 /* Avoid floating point errors */ {
+                self.__evil_weights[self.__evil_dist.sample(&mut thread_rng())].0
+            } else {
+                false
+            };
+            if should_respond_with_rolledback_state {
+                trace!("😈 Responding with rolledback state for key: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)));
+                return (None, true);
+            }
+            (res, false)
+        }
     }
 
     async fn handle_command(&mut self, command: CacheCommand) {
         match command {
             CacheCommand::Get(key, response_tx) => {
                 let res = self.cache.get(&key);
+
+                #[cfg(feature = "evil")]
+                let (res, did_rollback) = self.maybe_respond_with_rolledback_state(res, &key);
+
+                #[cfg(feature = "evil")]
+                {
+                    if did_rollback {
+                        self.__evil_count += 1;
+                    } else {
+                        self.__good_count += 1;
+                    }
+                }
+
                 if res.is_none() {
                     trace!("Key not found: {:?}", key);
                 }

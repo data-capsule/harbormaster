@@ -161,7 +161,14 @@ pub struct AppConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EvilConfig {
     pub simulate_byzantine_behavior: bool,
-    pub byzantine_start_block: u64,
+    pub byzantine_start_block: u64, // Used for consensus protocols.
+
+    #[serde(default = "default_rollbacked_response_ratio")]
+    pub rollbacked_response_ratio: f64, // Used for PSL workers.
+}
+
+const fn default_rollbacked_response_ratio() -> f64 {
+    0.0
 }
 
 
@@ -182,6 +189,9 @@ pub struct PSLWorkerConfig {
     pub rpc_config: RpcConfig,
     pub worker_config: WorkerConfig,
     pub app_config: AppConfig,
+
+    #[cfg(feature = "evil")]
+    pub evil_config: EvilConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -247,6 +257,9 @@ impl PSLWorkerConfig {
             rpc_config: self.rpc_config.clone(),
             consensus_config: self.worker_config.to_consensus_config(),
             app_config: self.app_config.clone(),
+
+            #[cfg(feature = "evil")]
+            evil_config: self.evil_config.clone(),
         }
     }
 }
@@ -326,7 +339,8 @@ impl ClientConfig {
             #[cfg(feature = "evil")]
             evil_config: EvilConfig {
                 simulate_byzantine_behavior: false,
-                byzantine_start_block: 0
+                byzantine_start_block: 0,
+                rollbacked_response_ratio: 0.0,
             }
         }
     }

@@ -331,6 +331,8 @@ impl BlockBroadcaster {
 
         #[cfg(feature = "evil")]
         {
+            use crate::proto::execution::ProtoTransaction;
+
 
             let (should_be_evil, byz_start_block) = {
                 let config = &self.config.get();

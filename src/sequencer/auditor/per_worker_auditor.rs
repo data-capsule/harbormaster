@@ -329,7 +329,7 @@ impl PerWorkerAuditor {
                 let correct_value_hex_str = &hex::encode(correct_value_hash);
                 let value_hex_str = &hex::encode(value_hash);
 
-                error!("❌ Read verification failed in {} for key: {} correct_value_hash: {} value_hash: {} read_vc: {} Value origin: {}",
+                trace!("❌ Read verification failed in {} for key: {} correct_value_hash: {} value_hash: {} read_vc: {} Value origin: {}",
                     self.worker_name, key_str, correct_value_hex_str, value_hex_str, read_vc, origin);
 
 

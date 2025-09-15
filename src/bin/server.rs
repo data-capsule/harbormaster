@@ -152,10 +152,6 @@ fn main() {
     let (protocol, app) = get_feature_set();
     info!("Protocol: {}, App: {}", protocol, app);
 
-    #[cfg(feature = "evil")]
-    if cfg.evil_config.simulate_byzantine_behavior {
-        warn!("Will simulate Byzantine behavior!");
-    }
 
     let core_ids = 
         Arc::new(Mutex::new(Box::pin(core_affinity::get_core_ids().unwrap())));
