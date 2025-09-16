@@ -37,7 +37,7 @@ pub enum CacheCommand {
         u64 /* Expected SeqNum */,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
-    Commit,
+    Commit(oneshot::Sender<VectorClock>),
     WaitForVC(VectorClock),
     
 }
@@ -508,9 +508,9 @@ impl CacheManager {
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();
             }
-            CacheCommand::Commit => {
+            CacheCommand::Commit(sender) => {
                 let (tx, rx) = oneshot::channel();
-                let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock(tx)).await;
+                let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock(tx, Some(sender))).await;
                 let actually_did_prepare = rx.await.unwrap();
                 if actually_did_prepare {
                     self.last_batch_time = Instant::now();
@@ -625,7 +625,7 @@ impl CacheManager {
         
             // A new block can be formed now.
             let (tx, rx) = oneshot::channel();
-            let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock(tx)).await;
+            let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlock(tx, None)).await;
             let actually_did_prepare = rx.await.unwrap();
             if actually_did_prepare {
                 self.last_batch_time = Instant::now();

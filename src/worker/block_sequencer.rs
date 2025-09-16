@@ -49,7 +49,7 @@ pub enum SequencerCommand {
     /// Blocks can only be formed on receiving this token.
     /// Helps maintain atomicity.
     /// (Doesn't mean it is forced to form a block, just that it can)
-    MakeNewBlock(oneshot::Sender<bool>),
+    MakeNewBlock(oneshot::Sender<bool>, Option<oneshot::Sender<VectorClock>>),
 
 
     /// Force a new block to be formed.
@@ -382,10 +382,14 @@ impl BlockSequencer {
 
                 self.is_quiscent = is_quiscent;
             },
-            SequencerCommand::MakeNewBlock(sender) => {
+            SequencerCommand::MakeNewBlock(sender_did_prepare, sender_vc) => {
                 self.send_heartbeat().await;
                 let actually_did_prepare = self.maybe_prepare_new_block().await;
-                sender.send(actually_did_prepare).unwrap();
+                sender_did_prepare.send(actually_did_prepare).unwrap();
+
+                if let Some(sender_vc) = sender_vc {
+                    sender_vc.send(self.curr_vector_clock.clone()).unwrap();
+                }
             },
             SequencerCommand::ForceMakeNewBlock => {
                 self.send_heartbeat().await;
@@ -653,8 +657,6 @@ impl BlockSequencer {
                 to_remove.push(vc.clone());
             }
         }
-
-        error!("Unlocking for VCs: {:?}", to_remove);
 
         for vc in to_remove.iter() {
             let mut senders = self.vc_wait_buffer.remove(vc).unwrap();

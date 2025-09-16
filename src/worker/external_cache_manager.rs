@@ -4,7 +4,7 @@ use hashbrown::HashMap;
 use log::{error, info, warn};
 use num_bigint::BigInt;
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{AtomicKeyStore, CachedBlock}, proto::{client::{ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, PinnedMessage, SenderType}, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::BlockSeqNumQuery, cache_manager::{CacheCommand, CacheError, CacheKey, CachedValue}}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::{AtomicKeyStore, CachedBlock}, proto::{client::{ProtoClientReply, ProtoClientRequest}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, PinnedMessage, SenderType}, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{BlockSeqNumQuery, VectorClock}, cache_manager::{CacheCommand, CacheError, CacheKey, CachedValue}}};
 use crate::worker::block_sequencer::SequencerCommand;
 
 use prost::Message as _;
@@ -142,9 +142,10 @@ impl ExternalCacheManager {
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();
             }
-            CacheCommand::Commit => {
+            CacheCommand::Commit(sender) => {
                 // The remote KV store is linearizable, but not serializable and has no sense of atomic multi-ops.
                 // So we don't need to commit anything.
+                sender.send(VectorClock::new()).unwrap();
             }
             CacheCommand::WaitForVC(_) => {
                 // This is No-op as well.

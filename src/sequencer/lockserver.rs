@@ -247,7 +247,6 @@ impl LockServer {
     /// If it is a write lock request, locktype must be Unlocked.
     /// If it is a read lock request, locktype must be Unlocked or Read(_).
     fn is_acquirable(lock_map: &HashMap<CacheKey, LockState>, cmd: &(LockServerCommand, SenderType, MsgAckChan)) -> bool {
-        error!("Testing acquireability for: {:?} against lock_map: {:?}", cmd, lock_map);
         
         let key = match &cmd.0 {
             LockServerCommand::AcquireReadLock(key) | LockServerCommand::AcquireWriteLock(key) => {
@@ -339,9 +338,6 @@ impl LockServer {
                 }
             })
             .collect();
-
-
-        error!("Lock server commands: {:?}", res);
 
         (only_release_commands, res)
     }

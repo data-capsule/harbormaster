@@ -1,12 +1,12 @@
 use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::Ok;
-use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
+use futures::{stream::FuturesUnordered, StreamExt};
 use hashbrown::HashSet;
 use log::{error, info, warn};
 use num_bigint::{BigInt, Sign};
 use prost::Message as _;
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{sync::{oneshot, Mutex}, task::JoinSet};
 
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, AtomicKeyStore}, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::ProtoVectorClock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::{BlockSeqNumQuery, VectorClock}};
 
@@ -80,10 +80,13 @@ impl CacheConnector {
         std::result::Result::Ok((result, rx))
     }
 
-    pub async fn dispatch_commit_request(&self) {
-        let command = CacheCommand::Commit;
+    pub async fn dispatch_commit_request(&self) -> VectorClock {
+        let (tx, rx) = oneshot::channel();
+        let command = CacheCommand::Commit(tx);
 
         self.cache_tx.send(command).await;
+
+        rx.await.unwrap()
     }
 
     pub async fn dispatch_lock_request(&self, key: Vec<u8>, is_read: bool) -> Result<(), CacheError> {
@@ -161,7 +164,6 @@ impl CacheConnector {
             };
 
             let vc = VectorClock::from(Some(proto_vc));
-            warn!("Waiting for VC: {:?}", vc);
             let _ = self.cache_tx.send(CacheCommand::WaitForVC(vc)).await;
             std::result::Result::Ok(())
         } else {
@@ -438,20 +440,15 @@ impl KVSTask {
 
         let mut locked_keys = Vec::new();
 
-        let mut locking_num = 0;
-
         for op in ops {
             let op_type = op.op_type();
 
             match op_type {
                 ProtoTransactionOpType::Write => {
                     let key = op.operands[0].clone();
+                    locked_keys.push(key.clone());
 
-                    let locking_key = format!("LOCK:{}", locking_num).as_bytes().to_vec();
-                    locking_num += 1;
-                    locked_keys.push(locking_key.clone());
-
-                    self.cache_connector.dispatch_lock_request(locking_key, false).await;
+                    self.cache_connector.dispatch_lock_request(key.clone(), false).await;
 
                     let value = op.operands[1].clone();
                     let res = self.cache_connector.dispatch_write_request(key, value).await;
@@ -468,10 +465,8 @@ impl KVSTask {
                 },
                 ProtoTransactionOpType::Read => {
                     let key = op.operands[0].clone();
-                    let locking_key = format!("LOCK:{}", locking_num).as_bytes().to_vec();
-                    locking_num += 1;
-                    locked_keys.push(locking_key.clone());
-                    self.cache_connector.dispatch_lock_request(locking_key, true).await;
+                    locked_keys.push(key.clone());
+                    self.cache_connector.dispatch_lock_request(key.clone(), false).await;
                     match self.cache_connector.dispatch_read_request(key).await {
                         std::result::Result::Ok((value, seq_num)) => {
                             results.push(ProtoTransactionOpResult {
@@ -493,11 +488,10 @@ impl KVSTask {
         }
 
         // Must unlock in reverse order.
-        error!("Locked keys: {:?}", locked_keys);
         locked_keys.reverse();
-        self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|key| (key.clone(), VectorClock::new())).collect()).await;
-
-        self.cache_connector.dispatch_commit_request().await;
+        
+        let vc = self.cache_connector.dispatch_commit_request().await;
+        self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|key| (key.clone(), vc.clone())).collect()).await;
 
         if atleast_one_write {
 
