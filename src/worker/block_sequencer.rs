@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::{self, Debug, Display}, ops::{Deref, DerefM
 
 use hashbrown::HashMap;
 use itertools::Itertools;
-use log::{info, trace, warn};
+use log::{error, info, trace, warn};
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
@@ -653,6 +653,8 @@ impl BlockSequencer {
                 to_remove.push(vc.clone());
             }
         }
+
+        error!("Unlocking for VCs: {:?}", to_remove);
 
         for vc in to_remove.iter() {
             let mut senders = self.vc_wait_buffer.remove(vc).unwrap();

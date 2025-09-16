@@ -19,7 +19,7 @@ pub struct SequencerContext {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-    lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType)>,
+    lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType, MsgAckChan)>,
     heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
 }
 
@@ -31,7 +31,7 @@ impl PinnedSequencerContext {
         config: AtomicConfig,
         keystore: AtomicKeyStore,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-        lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType)>,
+        lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType, MsgAckChan)>,
         heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
     ) -> Self {
         let context = SequencerContext {
@@ -58,7 +58,7 @@ impl ServerContextType for PinnedSequencerContext {
         self.keystore.get()
     }
 
-    async fn handle_rpc(&self, m: MessageRef<'_>, _ack_chan: MsgAckChan) -> Result<RespType, Error> {
+    async fn handle_rpc(&self, m: MessageRef<'_>, ack_chan: MsgAckChan) -> Result<RespType, Error> {
         let sender = match m.2 {
             crate::rpc::SenderType::Anon => {
                 return Err(Error::new(
@@ -92,10 +92,10 @@ impl ServerContextType for PinnedSequencerContext {
                 return Ok(RespType::NoResp);
             },
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
-                let lock_server_command = LockServer::to_lock_server_command(proto_client_request);
-                self.lock_server_tx.send((lock_server_command, sender)).await
+                let (only_release_commands, lock_server_command) = LockServer::to_lock_server_command(proto_client_request);
+                self.lock_server_tx.send((lock_server_command, sender, ack_chan)).await
                     .expect("Channel send error");
-                return Ok(RespType::NoResp);
+                return Ok(if !only_release_commands { RespType::Resp } else { RespType::NoResp });
             },
             crate::proto::rpc::proto_payload::Message::Heartbeat(proto_heartbeat) => {
                 self.heartbeat_tx.send((proto_heartbeat, sender)).await
@@ -149,8 +149,8 @@ impl SequencerNode {
         config: Config,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         fork_receiver_rx: Receiver<(ProtoAppendEntries, SenderType)>,
-        lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType)>,
-        lock_server_rx: Receiver<(Vec<LockServerCommand>, SenderType)>,
+        lock_server_tx: Sender<(Vec<LockServerCommand>, SenderType, MsgAckChan)>,
+        lock_server_rx: Receiver<(Vec<LockServerCommand>, SenderType, MsgAckChan)>,
     ) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
         let _num_crypto_tasks = config.consensus_config.num_crypto_workers;
@@ -198,7 +198,7 @@ impl SequencerNode {
         // Since this client fires Transactions, it needs to be full duplex.
         // The other side will try to send a reply.
         let controller_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
-        let controller = Controller::new(config.clone(), controller_client.into(), heartbeat_handler_controller_rx);
+        let controller = Controller::new(config.clone(), controller_client.into(), heartbeat_handler_controller_rx, lock_server_controller_rx);
 
         Self {
             config,

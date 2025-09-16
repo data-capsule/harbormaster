@@ -2,17 +2,20 @@ use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Durati
 
 use anyhow::Ok;
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
-use log::info;
+use hashbrown::HashSet;
+use log::{error, info, warn};
 use num_bigint::{BigInt, Sign};
 use prost::Message as _;
 use tokio::{sync::Mutex, task::JoinSet};
 
-use crate::{config::AtomicPSLWorkerConfig, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash}, proto::{client::{ProtoClientReply, ProtoTransactionReceipt}, execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionResult}}, rpc::{server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::BlockSeqNumQuery};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, AtomicKeyStore}, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::ProtoVectorClock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::{BlockSeqNumQuery, VectorClock}};
 
 use super::cache_manager::{CacheCommand, CacheError};
 
 pub struct CacheConnector {
     cache_tx: Sender<CacheCommand>,
+    blocking_client: PinnedClient,
+    nonblocking_client: PinnedClient,
 }
 
 // const NUM_WORKER_THREADS: usize = 4;
@@ -43,8 +46,8 @@ impl FutureSeqNum {
 }
 
 impl CacheConnector {
-    pub fn new(cache_tx: Sender<CacheCommand>) -> Self {
-        Self { cache_tx }
+    pub fn new(cache_tx: Sender<CacheCommand>, blocking_client: PinnedClient, nonblocking_client: PinnedClient) -> Self {
+        Self { cache_tx, blocking_client, nonblocking_client }
     }
 
     pub async fn dispatch_read_request(
@@ -82,12 +85,134 @@ impl CacheConnector {
 
         self.cache_tx.send(command).await;
     }
+
+    pub async fn dispatch_lock_request(&self, key: Vec<u8>, is_read: bool) -> Result<(), CacheError> {
+        let op_type = if is_read {
+            ProtoTransactionOpType::Read
+        } else {
+            ProtoTransactionOpType::Write
+        };
+
+        let tx = ProtoTransaction {
+            on_crash_commit: Some(ProtoTransactionPhase {
+                ops: vec![ProtoTransactionOp {
+                    op_type: op_type as i32,
+                    operands: vec![key],
+                }],
+            }),
+            on_byzantine_commit: None,
+            on_receive: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        };
+
+       let origin = self.blocking_client.0.config.get().net_config.name.clone();
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
+                tx: Some(tx),
+                origin,
+                sig: vec![0u8; 1],
+                client_tag: 0,
+            }))
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+        let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+
+        let res = PinnedClient::send_and_await_reply(&self.blocking_client, &"sequencer1".to_string(), request.as_ref()).await;
+        
+        if let Err(e) = res {
+            return Err(CacheError::LockNotAcquirable);
+        }
+
+        let res = res.unwrap();
+        
+        let std::result::Result::Ok(receipt) = ProtoClientReply::decode(&res.as_ref().0.as_slice()[0..res.as_ref().1]) else {
+            return Err(CacheError::InternalError);
+        };
+
+        let Some(receipt) = receipt.reply else {
+            return Err(CacheError::InternalError);
+        };
+
+        let crate::proto::client::proto_client_reply::Reply::Receipt(receipt) = receipt else {
+            return Err(CacheError::InternalError);
+        };
+
+        let Some(result) = receipt.results else {
+            return Err(CacheError::InternalError);
+        };
+
+        let Some(result) = result.result.first() else {
+            return Err(CacheError::InternalError);
+        };
+
+        if result.success {
+            let Some(vc) = result.values.first() else {
+                return Err(CacheError::InternalError);
+            };
+
+            let _sz = vc.len();
+
+            let std::result::Result::Ok(proto_vc) = ProtoVectorClock::decode(&vc.as_slice()[0.._sz]) else {
+                return Err(CacheError::InternalError);
+            };
+
+            let vc = VectorClock::from(Some(proto_vc));
+            warn!("Waiting for VC: {:?}", vc);
+            let _ = self.cache_tx.send(CacheCommand::WaitForVC(vc)).await;
+            std::result::Result::Ok(())
+        } else {
+            Err(CacheError::LockNotAcquirable)
+        }
+        
+
+    }
+
+    pub async fn dispatch_unlock_request(&self, mut keys_and_vcs: Vec<(Vec<u8>, VectorClock)>) {
+        let op_type = ProtoTransactionOpType::Unblock;
+
+        let tx = ProtoTransaction {
+            on_crash_commit: Some(ProtoTransactionPhase {
+                ops: keys_and_vcs.drain(..).map(|(key, vc)| {
+                    ProtoTransactionOp {
+                        op_type: op_type as i32,
+                        operands: vec![key, vc.serialize().encode_to_vec()],
+                    }
+                }).collect(),
+            }),
+            on_byzantine_commit: None,
+            on_receive: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        };
+
+        let origin = self.nonblocking_client.0.config.get().net_config.name.clone();
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::ClientRequest(ProtoClientRequest {
+                tx: Some(tx),
+                origin,
+                sig: vec![0u8; 1],
+                client_tag: 0,
+            }))
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+        let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+
+        let _ = PinnedClient::send(&self.nonblocking_client, &"sequencer1".to_string(), request.as_ref()).await;
+
+    }
 }
 
 pub type UncommittedResultSet = (Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, Option<u64> /* Some(potential seq_num; wait till committed) | None(reply immediately) */);
 
 pub trait ClientHandlerTask {
-    fn new(cache_tx: Sender<CacheCommand>, id: usize) -> Self;
+    fn new(cache_tx: CacheConnector, id: usize) -> Self;
     fn get_cache_connector(&self) -> &CacheConnector;
     fn get_id(&self) -> usize;
     fn get_total_work(&self) -> usize; // Useful for throghput calculation.
@@ -96,6 +221,7 @@ pub trait ClientHandlerTask {
 
 pub struct PSLAppEngine<T: ClientHandlerTask> {
     config: AtomicPSLWorkerConfig,
+    key_store: AtomicKeyStore,
     cache_tx: Sender<CacheCommand>,
     client_command_rx: Receiver<TxWithAckChanTag>,
     commit_tx_spawner: tokio::sync::broadcast::Sender<u64>,
@@ -105,10 +231,11 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
 }
 
 impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
-    pub fn new(config: AtomicPSLWorkerConfig, cache_tx: Sender<CacheCommand>, client_command_rx: Receiver<TxWithAckChanTag>, commit_tx_spawner: tokio::sync::broadcast::Sender<u64>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, key_store: AtomicKeyStore, cache_tx: Sender<CacheCommand>, client_command_rx: Receiver<TxWithAckChanTag>, commit_tx_spawner: tokio::sync::broadcast::Sender<u64>) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         Self {
             config,
+            key_store,
             cache_tx,
             client_command_rx,
             commit_tx_spawner,
@@ -130,15 +257,20 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
         app.log_timer.run().await;
 
+        let client_config = AtomicConfig::new(app.config.get().to_config());
+
         for id in 0..app.config.get().worker_config.num_worker_threads_per_worker {
+            let blocking_client = Client::new_atomic(client_config.clone(), app.key_store.clone(), true, (id + 1000) as u64).into();
+            let nonblocking_client = Client::new_atomic(client_config.clone(), app.key_store.clone(), true, (id + 2000) as u64).into();
             let cache_tx = app.cache_tx.clone();
+            let cache_connector = CacheConnector::new(cache_tx, blocking_client, nonblocking_client);
             let _reply_tx = reply_tx.clone();
             let client_command_rx = app.client_command_rx.clone();
             let (total_work_tx, total_work_rx) = make_channel(_chan_depth);
             total_work_txs.push(total_work_tx);
 
             app.handles.spawn(async move {
-                let mut handler_task = T::new(cache_tx, id);
+                let mut handler_task = T::new(cache_connector, id);
 
                 loop {
                     tokio::select! {
@@ -232,9 +364,9 @@ pub struct KVSTask {
 }
 
 impl ClientHandlerTask for KVSTask {
-    fn new(cache_tx: Sender<CacheCommand>, id: usize) -> Self {
+    fn new(cache_connector: CacheConnector, id: usize) -> Self {
         Self {
-            cache_connector: CacheConnector::new(cache_tx),
+            cache_connector,
             id,
             total_work: 0,
         }
@@ -304,12 +436,23 @@ impl KVSTask {
             }
         }
 
+        let mut locked_keys = Vec::new();
+
+        let mut locking_num = 0;
+
         for op in ops {
             let op_type = op.op_type();
 
             match op_type {
                 ProtoTransactionOpType::Write => {
                     let key = op.operands[0].clone();
+
+                    let locking_key = format!("LOCK:{}", locking_num).as_bytes().to_vec();
+                    locking_num += 1;
+                    locked_keys.push(locking_key.clone());
+
+                    self.cache_connector.dispatch_lock_request(locking_key, false).await;
+
                     let value = op.operands[1].clone();
                     let res = self.cache_connector.dispatch_write_request(key, value).await;
                     if let std::result::Result::Err(e) = res {
@@ -325,6 +468,10 @@ impl KVSTask {
                 },
                 ProtoTransactionOpType::Read => {
                     let key = op.operands[0].clone();
+                    let locking_key = format!("LOCK:{}", locking_num).as_bytes().to_vec();
+                    locking_num += 1;
+                    locked_keys.push(locking_key.clone());
+                    self.cache_connector.dispatch_lock_request(locking_key, true).await;
                     match self.cache_connector.dispatch_read_request(key).await {
                         std::result::Result::Ok((value, seq_num)) => {
                             results.push(ProtoTransactionOpResult {
@@ -344,6 +491,11 @@ impl KVSTask {
             }
             
         }
+
+        // Must unlock in reverse order.
+        error!("Locked keys: {:?}", locked_keys);
+        locked_keys.reverse();
+        self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|key| (key.clone(), VectorClock::new())).collect()).await;
 
         self.cache_connector.dispatch_commit_request().await;
 

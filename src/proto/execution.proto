@@ -32,6 +32,7 @@ enum ProtoTransactionOpType {
     BLOCK_ON_VC = 11;
     BLOCK_INDEFINITELY = 12;
     UNBLOCK = 13;
+
 }
 
 message ProtoTransactionOp {

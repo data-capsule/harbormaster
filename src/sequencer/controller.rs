@@ -4,7 +4,7 @@ use log::{debug, info, warn};
 use tokio::sync::Mutex;
 use prost::Message as _;
 
-use crate::{config::AtomicConfig, proto::{client::ProtoClientRequest, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::channel::Receiver, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
+use crate::{config::AtomicConfig, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::{LatencyProfile, MsgAckChan}, PinnedMessage, SenderType}, utils::channel::Receiver, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
 
 pub enum ControllerCommand {
     BlockAllWorkers,
@@ -12,7 +12,7 @@ pub enum ControllerCommand {
     UnblockAllWorkers,
 
     /// This is used to grant release-consistent locks to a worker.
-    BlockingLockAcquire(CacheKey, SenderType, VectorClock)
+    BlockingLockAcquire(CacheKey, SenderType, VectorClock, MsgAckChan)
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
@@ -24,7 +24,8 @@ enum BlockingState {
 pub struct Controller {
     config: AtomicConfig,
     client: PinnedClient,
-    command_rx: Receiver<ControllerCommand>,
+    command_rx1: Receiver<ControllerCommand>,
+    command_rx2: Receiver<ControllerCommand>,
 
     blocking_state: BlockingState,
 
@@ -32,11 +33,12 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub fn new(config: AtomicConfig, client: PinnedClient, command_rx: Receiver<ControllerCommand>) -> Self {
+    pub fn new(config: AtomicConfig, client: PinnedClient, command_rx1: Receiver<ControllerCommand>, command_rx2: Receiver<ControllerCommand>) -> Self {
         Self {
             config,
             client,
-            command_rx,
+            command_rx1,
+            command_rx2,
             blocking_state: BlockingState::Unblocked,
             __client_tag_counter: 0,
         }
@@ -51,7 +53,14 @@ impl Controller {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
-        let cmd = self.command_rx.recv().await.unwrap();
+        let cmd = tokio::select! {
+            Some(cmd) = self.command_rx1.recv() => {
+                cmd
+            }
+            Some(cmd) = self.command_rx2.recv() => {
+                cmd
+            }
+        };
 
         match cmd {
             ControllerCommand::BlockAllWorkers => {
@@ -63,8 +72,8 @@ impl Controller {
             ControllerCommand::UnblockAllWorkers => {
                 self.unblock_all_workers().await;
             }
-            ControllerCommand::BlockingLockAcquire(key, sender, vc) => {
-                self.blocking_lock_acquire(key, sender, vc).await;
+            ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan) => {
+                self.blocking_lock_acquire(key, sender, vc, ack_chan).await;
             }
         }
 
@@ -164,10 +173,29 @@ impl Controller {
 
     }
 
-    async fn blocking_lock_acquire(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock) {
-        if self.blocking_state == BlockingState::Blocked {
-            return;
-        }
-        info!("Blocking worker {:?} till VC {} to acquire lock on {:?}.", sender, vc, key);
+    async fn blocking_lock_acquire(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan: MsgAckChan) {
+        // if self.blocking_state == BlockingState::Blocked {
+        //     return;
+        // }
+        info!("Blocking worker {:?} till VC {} to acquire lock on {}.", sender, vc, String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone())));
+
+        let reply = ProtoClientReply {
+            client_tag: 0,
+            reply: Some(crate::proto::client::proto_client_reply::Reply::Receipt(ProtoTransactionReceipt {
+                req_digest: vec![],
+                block_n: 0,
+                tx_n: 0,
+                results: Some(ProtoTransactionResult {
+                    result: vec![ProtoTransactionOpResult { success: true, values: vec![vc.serialize().encode_to_vec()] }],
+                }),
+                await_byz_response: false,
+                byz_responses: vec![],
+            })),
+        };
+
+        let reply_ser = reply.encode_to_vec();
+        let _sz = reply_ser.len();
+        let reply_msg = PinnedMessage::from(reply_ser, _sz, crate::rpc::SenderType::Anon);
+        let _ = ack_chan.send((reply_msg, LatencyProfile::new())).await;
     }
 }

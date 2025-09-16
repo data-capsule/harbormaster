@@ -1,10 +1,12 @@
 use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
 
-use log::info;
+use log::{error, info};
 use tokio::sync::Mutex;
+use prost::Message as _;
 
-use crate::{config::AtomicConfig, proto::client::ProtoClientRequest, rpc::SenderType, sequencer::controller::ControllerCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
+use crate::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::{client::ProtoClientRequest, consensus::ProtoVectorClock}, rpc::{server::MsgAckChan, SenderType}, sequencer::controller::ControllerCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
 
+#[derive(Debug, Clone)]
 pub enum LockServerCommand {
     AcquireReadLock(CacheKey),
     AcquireWriteLock(CacheKey),
@@ -26,17 +28,17 @@ struct LockState {
 
 pub struct LockServer {
     config: AtomicConfig,
-    command_rx: Receiver<(Vec<LockServerCommand>, SenderType)>,
+    command_rx: Receiver<(Vec<LockServerCommand>, SenderType, MsgAckChan)>,
     controller_tx: Sender<ControllerCommand>,
 
     lock_map: HashMap<CacheKey, LockState>,
-    lock_request_buffer: HashMap<CacheKey, VecDeque<(LockServerCommand, SenderType)>>,
+    lock_request_buffer: HashMap<CacheKey, VecDeque<(LockServerCommand, SenderType, MsgAckChan)>>,
 
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
 }
 
 impl LockServer {
-    pub fn new(config: AtomicConfig, command_rx: Receiver<(Vec<LockServerCommand>, SenderType)>, controller_tx: Sender<ControllerCommand>) -> Self {
+    pub fn new(config: AtomicConfig, command_rx: Receiver<(Vec<LockServerCommand>, SenderType, MsgAckChan)>, controller_tx: Sender<ControllerCommand>) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         Self {
             config,
@@ -57,8 +59,8 @@ impl LockServer {
 
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
-            Some((cmds, sender)) = self.command_rx.recv() => {
-                let _ = self.process_cmd(cmds, sender).await;
+            Some((cmds, sender, ack_chan)) = self.command_rx.recv() => {
+                let _ = self.process_cmd(cmds, sender, ack_chan).await;
             }
             _ = self.log_timer.wait() => {
                 self.log_stats().await;
@@ -78,7 +80,7 @@ impl LockServer {
 
     }
 
-    async fn process_cmd(&mut self, cmds: Vec<LockServerCommand>, sender: SenderType) -> Result<(), ()> {
+    async fn process_cmd(&mut self, cmds: Vec<LockServerCommand>, sender: SenderType, ack_chan: MsgAckChan) -> Result<(), ()> {
         for cmd in cmds {
             let key = match cmd {
                 LockServerCommand::ReleaseLock(key, vc) => {
@@ -87,11 +89,15 @@ impl LockServer {
                 },
                 LockServerCommand::AcquireReadLock(ref key) | LockServerCommand::AcquireWriteLock(ref key) => {
                     let _key = key.clone();
-                    self.buffer_lock_request(cmd, sender.clone()).await;
+                    self.buffer_lock_request(cmd, sender.clone(), ack_chan.clone()).await;
                     _key
                 }
             };
-            self.maybe_grant_locks(key).await;
+            loop {
+                if !self.maybe_grant_locks(key.clone()).await {
+                    break;
+                }
+            }
         }
 
 
@@ -102,7 +108,7 @@ impl LockServer {
     /// Precondition:
     /// - is_acquirable(key) == true
     /// - => lock_map.get(key).is_none() or lock_map.get(key).locker == LockType::Unlocked or lock_map.get(key).locker == LockType::Read(_)
-    async fn acquire_read_lock(&mut self, key: CacheKey, sender: SenderType) {
+    async fn acquire_read_lock(&mut self, key: CacheKey, sender: SenderType, ack_chan: MsgAckChan) {
         let lock_state = self.lock_map.entry(key.clone()).or_insert(LockState {
             locker: LockType::Unlocked,
             min_vc: VectorClock::new(),
@@ -125,7 +131,7 @@ impl LockServer {
 
         let min_vc = lock_state.min_vc.clone();
 
-        self.notify(key, sender, min_vc).await;
+        self.notify(key, sender, min_vc, ack_chan).await;
 
     }
 
@@ -133,7 +139,7 @@ impl LockServer {
     /// Precondition:
     /// - is_acquirable(key) == true 
     /// - => lock_map.get(key).is_none() or lock_map.get(key).locker == LockType::Unlocked
-    async fn acquire_write_lock(&mut self, key: CacheKey, sender: SenderType) {
+    async fn acquire_write_lock(&mut self, key: CacheKey, sender: SenderType, ack_chan: MsgAckChan) {
         let lock_state = self.lock_map.entry(key.clone()).or_insert(LockState {
             locker: LockType::Unlocked,
             min_vc: VectorClock::new(),
@@ -143,10 +149,22 @@ impl LockServer {
 
 
         let min_vc = lock_state.min_vc.clone();
-        self.notify(key, sender, min_vc).await;
+        self.notify(key, sender, min_vc, ack_chan).await;
+    }
+
+
+    /// Ref: src/worker/app.rs:L263-264
+    /// The nonblocking client has id + 1000 of the blocking client.
+    /// The blocking client sends lock requests, the nonblocking client sends release requests.
+    fn convert_to_locker_sender(sender: SenderType) -> SenderType {
+        match sender {
+            SenderType::Auth(sender, id) => SenderType::Auth(sender, id - 1000),
+            _ => sender,
+        }
     }
 
     async fn release_lock(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock) {
+        let sender = Self::convert_to_locker_sender(sender);
         let Some(lock_state) = self.lock_map.get_mut(&key) else {
             return;
         };
@@ -179,7 +197,7 @@ impl LockServer {
         }
     }
 
-    async fn buffer_lock_request(&mut self, cmd: LockServerCommand, sender: SenderType) {
+    async fn buffer_lock_request(&mut self, cmd: LockServerCommand, sender: SenderType, ack_chan: MsgAckChan) {
         let key = match &cmd {
             LockServerCommand::AcquireReadLock(key) | LockServerCommand::AcquireWriteLock(key) => {
                 key.clone()
@@ -189,49 +207,48 @@ impl LockServer {
             }
         };
 
-        self.lock_request_buffer.entry(key).or_insert(VecDeque::new()).push_back((cmd, sender));
+        self.lock_request_buffer.entry(key).or_insert(VecDeque::new()).push_back((cmd, sender, ack_chan));
     }
 
-    async fn maybe_grant_locks(&mut self, key: CacheKey) {
-        let mut applied_lock_requests = Vec::new();
+    async fn maybe_grant_locks(&mut self, key: CacheKey) -> bool {
         let Some(pending_requests) = self.lock_request_buffer.get_mut(&key) else {
-            return;
+            return false;
         };
 
-        if pending_requests.is_empty() {
-            return;
-        }
 
-        while pending_requests.len() > 0 {
+        let (cmd, sender, ack_chan) = if pending_requests.len() > 0 {
             if !Self::is_acquirable(&self.lock_map, pending_requests.front().unwrap()) {
-                break;
+                return false;
             }
-            let Some((cmd, sender)) = pending_requests.pop_front() else {
+            let Some((cmd, sender, ack_chan)) = pending_requests.pop_front() else {
                 unreachable!();
             };
 
-            applied_lock_requests.push((cmd, sender));
-        }
+            (cmd, sender, ack_chan)
+        } else {
+            return false;
+        };
 
-        for (cmd, sender) in applied_lock_requests.drain(..) {
-            match cmd {
-                LockServerCommand::AcquireReadLock(key) => {
-                    self.acquire_read_lock(key, sender).await;
-                },
-                LockServerCommand::AcquireWriteLock(key) => {
-                    self.acquire_write_lock(key, sender).await;
-                },
-                _ => {
-                    unreachable!();
-                }
-            };
-        }
+        match cmd {
+            LockServerCommand::AcquireReadLock(key) => {
+                self.acquire_read_lock(key, sender, ack_chan).await;
+            },
+            LockServerCommand::AcquireWriteLock(key) => {
+                self.acquire_write_lock(key, sender, ack_chan).await;
+            },
+            _ => {
+                unreachable!();
+            }
+        };
+
+        true
     }
-
 
     /// If it is a write lock request, locktype must be Unlocked.
     /// If it is a read lock request, locktype must be Unlocked or Read(_).
-    fn is_acquirable(lock_map: &HashMap<CacheKey, LockState>, cmd: &(LockServerCommand, SenderType)) -> bool {
+    fn is_acquirable(lock_map: &HashMap<CacheKey, LockState>, cmd: &(LockServerCommand, SenderType, MsgAckChan)) -> bool {
+        error!("Testing acquireability for: {:?} against lock_map: {:?}", cmd, lock_map);
+        
         let key = match &cmd.0 {
             LockServerCommand::AcquireReadLock(key) | LockServerCommand::AcquireWriteLock(key) => {
                 key
@@ -259,27 +276,37 @@ impl LockServer {
         }
     }
 
-    async fn notify(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock) {
-        let cmd = ControllerCommand::BlockingLockAcquire(key, sender, vc);
+    async fn notify(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan: MsgAckChan) {
+        let cmd = ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan);
         self.controller_tx.send(cmd).await.unwrap();
     }
 
 
     /// Semantics are as follows:
     /// - Transaction must have an on_crash_commit phase.
-    /// - For all ops in on_crash_commit, READ request is considered as Read Lock request, and WRITE request is considered as Write Lock request.
+    /// - For all ops in on_crash_commit,
+    ///     READ request is considered as Read Lock request,
+    ///     WRITE request is considered as Write Lock request,
+    ///     UNBLOCK request is considered as Release request,
     /// - Ordering of the locks matter. Otherwise the system will deadlock.
     /// - This function will NOT sort the lock names.
-    pub fn to_lock_server_command(client_request: ProtoClientRequest) -> Vec<LockServerCommand> {
+    /// - Returns whether the client expects a reply.
+    pub fn to_lock_server_command(client_request: ProtoClientRequest) -> (bool, Vec<LockServerCommand>) {
         let Some(tx) = client_request.tx else {
-            return vec![];
+            return (false, vec![]);
         };
 
         let Some(phase) = tx.on_crash_commit else {
-            return vec![];
+            return (false, vec![]);
         };
 
-        phase.ops.iter()
+        if phase.ops.is_empty() {
+            return (false, vec![]);
+        }
+
+        let mut only_release_commands = true;
+
+        let res = phase.ops.iter()
             .filter_map(|op| {
                 match op.op_type() {
                     crate::proto::execution::ProtoTransactionOpType::Read | crate::proto::execution::ProtoTransactionOpType::Write => {
@@ -288,18 +315,34 @@ impl LockServer {
                         }
 
                         let key = op.operands[0].clone();
+                        only_release_commands = false;
 
                         if op.op_type() == crate::proto::execution::ProtoTransactionOpType::Read {
                             Some(LockServerCommand::AcquireReadLock(key))
                         } else {
                             Some(LockServerCommand::AcquireWriteLock(key))
                         }
+
+                    },
+                    crate::proto::execution::ProtoTransactionOpType::Unblock => {
+                        if op.operands.len() != 2 {
+                            return None;
+                        }
+
+                        let key = op.operands[0].clone();
+                        let vc = ProtoVectorClock::decode(op.operands[1].as_slice()).unwrap();
+                        Some(LockServerCommand::ReleaseLock(key, VectorClock::from(Some(vc))))
                     },
                     _ => {
                         return None;
                     }
                 }
             })
-            .collect()
+            .collect();
+
+
+        error!("Lock server commands: {:?}", res);
+
+        (only_release_commands, res)
     }
 }

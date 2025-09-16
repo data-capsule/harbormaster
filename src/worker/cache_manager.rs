@@ -18,7 +18,8 @@ pub enum CacheError {
     #[error("Internal error")]
     InternalError,
 
-
+    #[error("Lock not acquirable")]
+    LockNotAcquirable,
 }
 
 pub enum CacheCommand {
@@ -37,7 +38,8 @@ pub enum CacheCommand {
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
     Commit,
-    // WaitForVC(VectorClock),
+    WaitForVC(VectorClock),
+    
 }
 
 
@@ -514,11 +516,11 @@ impl CacheManager {
                     self.last_batch_time = Instant::now();
                 }
             }
-            // CacheCommand::WaitForVC(vc) => {
-            //     let (tx, rx) = oneshot::channel();
-            //     self.blocked_on_vc_wait = Some(rx);
-            //     let _ = self.block_sequencer_tx.send(SequencerCommand::WaitForVC(vc, tx)).await;
-            // }
+            CacheCommand::WaitForVC(vc) => {
+                let (tx, rx) = oneshot::channel();
+                self.blocked_on_vc_wait = Some(rx);
+                let _ = self.block_sequencer_tx.send(SequencerCommand::WaitForVC(vc, tx)).await;
+            }
         }
     }
 

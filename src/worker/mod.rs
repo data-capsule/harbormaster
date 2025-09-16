@@ -297,6 +297,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
 
         let app = Arc::new(Mutex::new(PSLAppEngine::<E>::new(
             config.clone(),
+            keystore.clone(),
             cache_tx,
             client_request_rx,
             commit_tx_spawner.clone(),
