@@ -108,6 +108,11 @@ impl CachedValue {
         self.value.clone()
     }
 
+    /// Size estimate in bytes.
+    pub fn size(&self) -> usize {
+        self.value.len() + std::mem::size_of::<u64>() + self.val_hash.to_bytes_be().1.len()
+    }
+
     /// Completely new value, with seq_num = 1
     pub fn new(value: Vec<u8>, val_hash: BigInt) -> Self {
         Self::new_with_seq_num(value, 1, val_hash)

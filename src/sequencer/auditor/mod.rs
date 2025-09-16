@@ -1,12 +1,36 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, pin::Pin, sync::{atomic::fence, Arc}, time::Duration};
 
+use dashmap::DashMap;
 use log::{info, warn};
-use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver}, Mutex}, task::JoinSet};
+use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::auditor::{per_worker_auditor::PerWorkerAuditor, snapshot_store::SnapshotStore}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::block_sequencer::VectorClock};
+use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::auditor::{per_worker_auditor::PerWorkerAuditor}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{CacheKey, CachedValue}}};
 
-mod snapshot_store;
 mod per_worker_auditor;
+
+
+#[derive(Clone)]
+pub struct SnapshotStore(Arc<DashMap<CacheKey, CachedValue>>);
+
+impl SnapshotStore {
+    pub fn new() -> Self {
+        Self(Arc::new(DashMap::new()))
+    }
+
+    pub fn get(&self, key: &CacheKey) -> Option<CachedValue> {
+        self.0.get(key)
+            .map(|mapref| mapref.value().clone())
+    }
+
+    pub fn insert(&self, key: CacheKey, value: CachedValue) {
+        let _ = self.0.entry(key).or_insert(value.clone())
+            .merge_cached(value);
+    }
+
+    pub fn size(&self) -> usize {
+        self.0.iter().map(|mapref| mapref.key().len() + mapref.value().size()).sum()
+    }
+}
 
 pub struct Auditor {
     config: AtomicConfig,
@@ -14,9 +38,11 @@ pub struct Auditor {
     snapshot_store: SnapshotStore,
 
     block_rx: Receiver<CachedBlock>,
-    gc_rx: UnboundedReceiver<(String, VectorClock)>,
+    gc_rx: UnboundedReceiver<(String, VectorClock, Vec<(CacheKey, CachedValue)>)>,
+    per_worker_min_gc_txs: Vec<UnboundedSender<VectorClock>>,
     gc_counter: usize,
     gc_timer: Arc<Pin<Box<ResettableTimer>>>,
+    snapshot_update_buffer: HashMap<VectorClock, Vec<(CacheKey, CachedValue)>>,
 
     per_worker_auditor_txs: Vec<Sender<CachedBlock>>,
     per_worker_auditors: Vec<Arc<Mutex<PerWorkerAuditor>>>,
@@ -37,16 +63,19 @@ impl Auditor {
         let (gc_tx, gc_rx) = unbounded_channel();
 
         let mut per_worker_auditor_txs = Vec::new();
+        let mut per_worker_min_gc_txs = Vec::new();
 
-        let snapshot_store = SnapshotStore::new(all_worker_names.clone().cloned().collect::<Vec<_>>());
+        let snapshot_store = SnapshotStore::new();
         let per_worker_auditors = all_worker_names.clone().map(|name| {
             let (tx, rx) = make_channel(_chan_depth);
+            let (min_gc_tx, min_gc_rx) = unbounded_channel();
+            per_worker_min_gc_txs.push(min_gc_tx);
             per_worker_auditor_txs.push(tx);
             
             Arc::new(Mutex::new(
                 PerWorkerAuditor::new(
                     config.clone(), name.clone(), rx,
-                    gc_tx.clone(), snapshot_store.clone()
+                    gc_tx.clone(), min_gc_rx, snapshot_store.clone()
                 )
             ))
                 
@@ -61,12 +90,14 @@ impl Auditor {
             gc_rx,
             snapshot_store,
             block_rx,
+            per_worker_min_gc_txs,
             per_worker_auditor_txs,
             per_worker_auditors,
             per_worker_auditor_handles: JoinSet::new(),
             log_timer,
             gc_counter: 0,
             gc_timer,
+            snapshot_update_buffer: HashMap::new(),
         }
     }
 
@@ -93,8 +124,8 @@ impl Auditor {
         if gc_rx_pending > 0 {
             let mut gc_rx_buffer = Vec::with_capacity(gc_rx_pending);
             self.gc_rx.recv_many(&mut gc_rx_buffer, gc_rx_pending).await;
-            for (worker_name, read_vc) in gc_rx_buffer {
-                self.handle_gc(worker_name, read_vc).await;
+            for (worker_name, read_vc, updates) in gc_rx_buffer {
+                self.handle_gc(worker_name, read_vc, updates).await;
             }
 
             return Ok(());
@@ -107,8 +138,8 @@ impl Auditor {
             Some(block) = self.block_rx.recv() => {
                 self.handle_block(block).await;
             }
-            Some((worker_name, read_vc)) = self.gc_rx.recv() => {
-                self.handle_gc(worker_name, read_vc).await;
+            Some((worker_name, read_vc, updates)) = self.gc_rx.recv() => {
+                self.handle_gc(worker_name, read_vc, updates).await;
             }
             _ = self.gc_timer.wait() => {
                 self.do_gc().await;
@@ -119,19 +150,7 @@ impl Auditor {
     }
 
     async fn log_stats(&mut self) {
-        info!("GC VC: {}, Snapshot store size: {}", self.get_min_gc_vc(), self.snapshot_store.size());
-
-        if self.snapshot_store.ghost_reborn_counter() > 0 {
-            warn!("Ghost reborn counter: {}", self.snapshot_store.ghost_reborn_counter());
-        } else {
-            info!("Ghost reborn counter: {}", self.snapshot_store.ghost_reborn_counter());
-        }
-
-        if self.snapshot_store.concurrent_repeated_work_counter() > 0 {
-            warn!("Concurrent repeated work counter: {}", self.snapshot_store.concurrent_repeated_work_counter());
-        } else {
-            info!("Concurrent repeated work counter: {}", self.snapshot_store.concurrent_repeated_work_counter());
-        }
+        info!("GC VC: {}, Snapshot store size: {} MiB", self.get_min_gc_vc(), self.snapshot_store.size() as f64 / 1024.0 / 1024.0);
     }
 
     async fn handle_block(&mut self, block: CachedBlock) {
@@ -140,7 +159,8 @@ impl Auditor {
         }
     }
 
-    async fn handle_gc(&mut self, worker_name: String, read_vc: VectorClock) {
+    async fn handle_gc(&mut self, worker_name: String, read_vc: VectorClock, updates: Vec<(CacheKey, CachedValue)>) {
+        self.snapshot_update_buffer.insert(read_vc.clone(), updates);
         self.gc_vcs.insert(worker_name.clone(), read_vc);
         self.gc_counter += 1;
 
@@ -156,16 +176,27 @@ impl Auditor {
     async fn do_gc(&mut self) {
         let min_vc = self.get_min_gc_vc();
 
-        self.snapshot_store.prune_lesser_snapshots(&min_vc).await;
+        let mut to_remove = Vec::new();
+        let mut updates = Vec::new();
+        for (vc, _updates) in self.snapshot_update_buffer.iter() {
+            if vc <= &min_vc {
+                to_remove.push(vc.clone());
+            }
+        }
+        for vc in to_remove {
+            updates.extend(self.snapshot_update_buffer.remove(&vc).unwrap());
+        }
 
-        let all_worker_names = self.snapshot_store.store.iter().map(|mapref| mapref.key().clone()).collect::<Vec<_>>();
+        for (key, value) in updates {
+            self.snapshot_store.insert(key, value);
+        }
 
-        // for worker_name in all_worker_names {
-        //     self.snapshot_store.prune_concurrent_snapshots(&self.gc_vcs.iter()
-        //             .filter(|(_worker, _)| worker_name != **_worker)
-        //             .map(|(_worker, vc)| vc)
-        //         .collect::<Vec<_>>(), &self.gc_vcs.values().collect::<Vec<_>>()).await;
-        // }
+        // This ordering is very important.
+        fence(std::sync::atomic::Ordering::Release);
+
+        for tx in self.per_worker_min_gc_txs.iter() {
+            tx.send(min_vc.clone()).unwrap();
+        }
 
         self.gc_counter = 0;
         self.gc_timer.reset();
