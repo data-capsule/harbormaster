@@ -72,11 +72,25 @@ impl LockServer {
 
     async fn log_stats(&self) {
         let locked_keys = self.lock_map.iter().filter(|(_, lock_state)| !matches!(lock_state.locker, LockType::Unlocked)).count();
+        let buffered_requests = self.lock_request_buffer.iter().map(|(_, requests)| requests.len()).sum::<usize>();
         info!("Total locks: {}, Total active locks: {}, Buffered requests: {}",
             self.lock_map.len(),
             locked_keys,
-            self.lock_request_buffer.len()
+            buffered_requests
         );
+
+        if buffered_requests <= 10 {
+            log::warn!("Buffered requests: {:?}", self.lock_request_buffer.iter()
+                .filter(|(_, requests)| requests.len() > 0)
+                .map(|(key, requests)| (String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone())), 
+                    self.lock_map.get(key).unwrap().locker.clone(),
+                    requests.iter().map(|(_, sender, _)| sender.clone()).collect::<Vec<_>>()))
+                .collect::<Vec<_>>()
+            );
+
+        }
+
+
 
     }
 

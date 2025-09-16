@@ -430,8 +430,8 @@ impl BlockSequencer {
 
     async fn force_prepare_new_block(&mut self) {
         // Force to send null blocks if needed.
-        trace!("Force preparing new block. VC dirty: {} , all_write_op_bag: {}, self_write_op_bag: {}, self_read_op_bag: {}",
-            self.__vc_dirty, self.all_write_op_bag.len(), self.self_write_op_bag.len(), self.self_read_op_bag.len());
+        warn!("Force preparing new block. VC dirty: {} , all_write_op_bag: {}, self_write_op_bag: {}, self_read_op_bag: {} vc_wait_buffer: {}",
+            self.__vc_dirty, self.all_write_op_bag.len(), self.self_write_op_bag.len(), self.self_read_op_bag.len(), self.vc_wait_buffer.len());
 
         if !(self.__vc_dirty
             || self.all_write_op_bag.len() > 0

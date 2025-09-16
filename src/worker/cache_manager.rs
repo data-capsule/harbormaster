@@ -324,6 +324,10 @@ impl CacheManager {
         let block_on_vc_wait_is_some = self.blocked_on_vc_wait.is_some();
         let block_on_read_snapshot_is_some = self.block_on_read_snapshot.is_some();
 
+        if block_on_vc_wait_is_some && block_on_read_snapshot_is_some {
+            error!("Both block_on_vc_wait and block_on_read_snapshot are set!!");
+        }
+
         /*
         We only process new blocks from other workers if block_on_read_snapshot is None.
         Processing new blocks is the only way to clear block_on_vc_wait.
@@ -345,6 +349,9 @@ impl CacheManager {
                 if self.last_batch_time.elapsed() > Duration::from_millis(self.config.get().worker_config.batch_max_delay_ms) {
                     self.last_batch_time = Instant::now();
                     let _ = self.block_sequencer_tx.send(SequencerCommand::ForceMakeNewBlock).await;
+                    if block_on_vc_wait_is_some && block_on_read_snapshot_is_some {
+                        error!("Force making new block under both block_on_vc_wait and block_on_read_snapshot");
+                    }
                 }
             },
             Some((block_rx, sender, _)) = Self::check_block_rx(&mut self.block_rx, block_on_read_snapshot_is_some) => {
@@ -362,7 +369,7 @@ impl CacheManager {
             },
             Some(Ok(_)) = Self::check_block_on_read_snapshot(&mut self.block_on_read_snapshot) => {
                 self.block_on_read_snapshot = None;
-                // warn!("Snapshot cleared");
+                warn!("Snapshot cleared");
             },
             Some(command) = Self::check_command_rx(&mut self.command_rx, block_on_vc_wait_is_some) => {
                 if block_on_vc_wait_is_some {
