@@ -168,7 +168,7 @@ impl StorageNode {
 
         let fork_receiver_crypto = crypto.get_connector();
         let fork_receiver_storage = storage.get_connector(crypto.get_connector());
-        let (staging_tx, staging_rx) = unbounded_channel();
+        let (staging_tx, staging_rx) = tokio::sync::mpsc::channel(_chan_depth);
         let (logserver_tx, logserver_rx) = make_channel(_chan_depth);
         let (fork_receiver_cmd_tx, fork_receiver_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (gc_tx, gc_rx) = make_channel(_chan_depth);

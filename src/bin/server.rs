@@ -142,7 +142,7 @@ async fn run_main(run_mode: RunMode) -> Result<(), io::Error> {
     Ok(())
 }
 
-const NUM_THREADS: usize = 32;
+const NUM_THREADS: usize = 16;
 
 fn main() {
     log4rs::init_config(config::default_log4rs_config()).unwrap();
@@ -187,11 +187,11 @@ fn main() {
             let id = (start_idx + i.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) % lcores.len();
             let res = core_affinity::set_for_current(lcores[id]);
     
-            if res {
-                debug!("Thread pinned to core {:?}", id);
-            }else{
-                debug!("Thread pinning to core {:?} failed", id);
-            }
+            // if res {
+            //     debug!("Thread pinned to core {:?}", id);
+            // }else{
+            //     debug!("Thread pinning to core {:?} failed", id);
+            // }
             std::io::stdout().flush()
                 .unwrap();
         })

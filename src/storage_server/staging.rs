@@ -13,7 +13,7 @@ pub struct Staging {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     client: PinnedClient,
-    block_rx: UnboundedReceiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, SenderType /* origin */)>, // Sender may not be equal to origin.
+    block_rx: tokio::sync::mpsc::Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, SenderType /* origin */)>, // Sender may not be equal to origin.
     logserver_tx: Sender<(SenderType, CachedBlock)>,
     gc_tx: Option<Sender<(SenderType, u64)>>,
     gc_timer: Arc<Pin<Box<ResettableTimer>>>,
@@ -30,7 +30,7 @@ const PER_PEER_BLOCK_WSS: u64 = 1_000;
 impl Staging {
     pub fn new(
         config: AtomicConfig, keystore: AtomicKeyStore,
-        block_rx: UnboundedReceiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, SenderType /* origin */)>, // Sender may not be equal to origin.
+        block_rx: tokio::sync::mpsc::Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, SenderType /* origin */)>, // Sender may not be equal to origin.
         logserver_tx: Sender<(SenderType, CachedBlock)>,
         gc_tx: Option<Sender<(SenderType, u64)>>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
@@ -98,6 +98,8 @@ impl Staging {
 
 
     async fn handle_block(&mut self, block_and_sender_and_origin: Option<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType, SenderType)>) -> Result<(), ()> {
+        // error!("Received block {:?}", block_and_sender_and_origin);
+        
         if block_and_sender_and_origin.is_none() {
             return Err(());
         }
@@ -105,7 +107,6 @@ impl Staging {
         let (block, sender, origin) = block_and_sender_and_origin.unwrap();
 
         let block = block.await;
-        debug!("Received block {:?} from sender: {:?}", block, sender);
 
         if block.is_err() {
             return Err(());

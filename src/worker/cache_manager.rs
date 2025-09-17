@@ -198,9 +198,9 @@ pub type CacheKey = Vec<u8>;
 
 pub struct CacheManager {
     config: AtomicPSLWorkerConfig,
-    command_rx: UnboundedReceiver<CacheCommand>,
+    command_rx: tokio::sync::mpsc::Receiver<CacheCommand>,
     commit_command_rx: Receiver<CacheCommand>,
-    block_rx: UnboundedReceiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)>, // Invariant for CacheManager: sender == origin
+    block_rx: tokio::sync::mpsc::Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)>, // Invariant for CacheManager: sender == origin
     sequencer_request_rx: Receiver<TxWithAckChanTag>,
     
     block_sequencer_tx: Sender<SequencerCommand>,
@@ -231,10 +231,10 @@ pub struct CacheManager {
 impl CacheManager {
     pub fn new(
         config: AtomicPSLWorkerConfig,
-        command_rx: UnboundedReceiver<CacheCommand>,
+        command_rx: tokio::sync::mpsc::Receiver<CacheCommand>,
         commit_command_rx: Receiver<CacheCommand>,
         sequencer_request_rx: Receiver<TxWithAckChanTag>,
-        block_rx: UnboundedReceiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)>, // Invariant for CacheManager: sender == origin
+        block_rx: tokio::sync::mpsc::Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)>, // Invariant for CacheManager: sender == origin
         block_sequencer_tx: Sender<SequencerCommand>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
     ) -> Self {
@@ -306,7 +306,7 @@ impl CacheManager {
         }
     }
 
-    async fn check_block_rx(block_rx: &mut UnboundedReceiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)>, block_on_read_snapshot_is_some: bool) -> Option<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)> {
+    async fn check_block_rx(block_rx: &mut tokio::sync::mpsc::Receiver<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)>, block_on_read_snapshot_is_some: bool) -> Option<(oneshot::Receiver<Result<CachedBlock, std::io::Error>>, SenderType /* sender */, SenderType /* origin */)> {
         if block_on_read_snapshot_is_some {
             std::future::pending::<()>().await;
             None
@@ -315,7 +315,7 @@ impl CacheManager {
         }
     }
 
-    async fn check_command_rx(command_rx: &mut UnboundedReceiver<CacheCommand>, blocked_on_vc_wait_is_some: bool) -> Vec<CacheCommand> {
+    async fn check_command_rx(command_rx: &mut tokio::sync::mpsc::Receiver<CacheCommand>, blocked_on_vc_wait_is_some: bool) -> Vec<CacheCommand> {
         if blocked_on_vc_wait_is_some {
             std::future::pending::<()>().await;
             Vec::new()

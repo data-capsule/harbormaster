@@ -1,6 +1,6 @@
-use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
-use log::{error, info};
+use log::{error, info, trace};
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 use prost::Message as _;
 
@@ -24,6 +24,8 @@ enum LockType {
 struct LockState {
     locker: LockType,
     min_vc: VectorClock,
+
+    __lock_time: Instant,
 }
 
 pub struct LockServer {
@@ -38,6 +40,9 @@ pub struct LockServer {
     lock_request_buffer: HashMap<CacheKey, VecDeque<(LockServerCommand, SenderType, Option<MsgAckChanWithTag>)>>,
 
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
+
+    __total_lock_commands: usize,
+    __total_unlock_commands: usize,
 }
 
 impl LockServer {
@@ -52,6 +57,9 @@ impl LockServer {
             lock_map: HashMap::new(),
             lock_request_buffer: HashMap::new(),
             log_timer,
+
+            __total_lock_commands: 0,
+            __total_unlock_commands: 0,
         }
     }
 
@@ -147,6 +155,8 @@ impl LockServer {
     }
 
     async fn process_cmd(&mut self, cmds: Vec<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>) -> Result<(), ()> {
+        let start_time = Instant::now();
+        let _n = cmds.iter().map(|(lk_cmds, _, _, _)| lk_cmds.len()).sum::<usize>();
         for (lk_cmds, sender, ack_chan, client_tag) in cmds {
             let _n = lk_cmds.len() as isize;
 
@@ -155,16 +165,18 @@ impl LockServer {
                 let key = match cmd {
                     LockServerCommand::ReleaseLock(key, vc) => {
                         self.release_lock(key.clone(), sender.clone(), vc.clone());
+                        self.__total_unlock_commands += 1;
 
-                        if i == _n - 1 {
-                            self.controller_tx.send(ControllerCommand::UnlockAck(Some((ack_chan.clone(), client_tag, sender.clone())))).await.unwrap();
-                        } else {
+                        // if i == _n - 1 {
+                        //     self.controller_tx.send(ControllerCommand::UnlockAck(Some((ack_chan.clone(), client_tag, sender.clone())))).await.unwrap();
+                        // } else {
                             self.controller_tx.send(ControllerCommand::UnlockAck(None)).await.unwrap();
-                        }
+                        // }
                         key.clone()
                     },
                     LockServerCommand::AcquireReadLock(ref key) | LockServerCommand::AcquireWriteLock(ref key) => {
                         let _key = key.clone();
+                        self.__total_lock_commands += 1;
                         if i == _n - 1 {
                             self.buffer_lock_request(cmd.clone(), sender.clone(), Some((ack_chan.clone(), client_tag, sender.clone())));
                         } else {
@@ -182,6 +194,8 @@ impl LockServer {
             }
         }
 
+        trace!("Process cmd time: {:?} for {} commands. Lock commands: {}, Unlock commands: {}", start_time.elapsed(), _n, self.__total_lock_commands, self.__total_unlock_commands);
+
 
         Ok(())
     }
@@ -194,6 +208,7 @@ impl LockServer {
         let lock_state = self.lock_map.entry(key.clone()).or_insert(LockState {
             locker: LockType::Unlocked,
             min_vc: VectorClock::new(),
+            __lock_time: Instant::now(),
         });
         
 
@@ -202,6 +217,7 @@ impl LockServer {
                 let mut readers = HashSet::new();
                 readers.insert(sender.clone());
                 lock_state.locker = LockType::Read(readers);
+                lock_state.__lock_time = Instant::now();
             },
             LockType::Read(readers) => {
                 readers.insert(sender.clone());
@@ -225,9 +241,11 @@ impl LockServer {
         let lock_state = self.lock_map.entry(key.clone()).or_insert(LockState {
             locker: LockType::Unlocked,
             min_vc: VectorClock::new(),
+            __lock_time: Instant::now(),
         });
 
         lock_state.locker = LockType::Write(sender.clone());
+        lock_state.__lock_time = Instant::now();
 
 
         let min_vc = lock_state.min_vc.clone();
@@ -249,11 +267,14 @@ impl LockServer {
     fn release_lock(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock) {
         let sender = Self::convert_to_locker_sender(sender);
         let Some(lock_state) = self.lock_map.get_mut(&key) else {
+            error!(">>>>>>>>>>>>>>> Key not found in lock map: {:?}", key);
             return;
         };
 
         let (must_update_vc, must_reset_locktype) = match &mut lock_state.locker {
             LockType::Unlocked => {
+                error!(">>>>>>>>>>>>>>> Already unlocked: {:?}", key);
+
                 // Nothing to do here.
                 (false, true)
             },
@@ -264,8 +285,10 @@ impl LockServer {
             },
             LockType::Write(current_locker) => {
                 if current_locker == &sender {
+                    // error!(">>>>>>>>>>>>>>> Current locker: {:?}, Sender: {:?} returning true", current_locker, sender);
                     (true, true)
                 } else {
+                    error!(">>>>>>>>>>>>>>> Current locker: {:?}, Sender: {:?} returning false", current_locker, sender);
                     (false, false)
                 }
             },
@@ -277,6 +300,7 @@ impl LockServer {
 
         if must_reset_locktype {
             lock_state.locker = LockType::Unlocked;
+            trace!("Lock time: {:?}", lock_state.__lock_time.elapsed());
         }
     }
 
@@ -373,7 +397,7 @@ impl LockServer {
 
     async fn notify(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan_tag: Option<MsgAckChanWithTag>) {
         let cmd = ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan_tag);
-        self.controller_tx.send(cmd).await.unwrap();
+        // self.controller_tx.send(cmd).await.unwrap();
     }
 
 

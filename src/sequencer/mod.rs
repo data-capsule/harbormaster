@@ -100,11 +100,12 @@ impl ServerContextType for PinnedSequencerContext {
                 self.lock_server_tx.send((lock_server_command, sender, ack_chan, client_tag))
                     .expect("Channel send error");
                 // return Ok(if !only_release_commands { RespType::Resp } else { RespType::NoResp });
-                return Ok(RespType::Resp);
+                // return Ok(RespType::Resp);
+                return Ok(RespType::NoResp);
             },
             crate::proto::rpc::proto_payload::Message::Heartbeat(proto_heartbeat) => {
-                self.heartbeat_handler_tx.send((proto_heartbeat.clone(), sender.clone()))
-                    .expect("Channel send error");
+                // self.heartbeat_handler_tx.send((proto_heartbeat.clone(), sender.clone()))
+                //     .expect("Channel send error");
                 
                 self.heartbeat_tx.send((proto_heartbeat, sender)).await
                     .expect("Channel send error");
@@ -188,7 +189,7 @@ impl SequencerNode {
 
         let fork_receiver_crypto = crypto.get_connector();
         let fork_receiver_storage = storage.get_connector(crypto.get_connector());
-        let (staging_tx, staging_rx) = unbounded_channel();
+        let (staging_tx, staging_rx) = tokio::sync::mpsc::channel(_chan_depth);
         let (logserver_tx, logserver_rx) = make_channel(_chan_depth);
         let (fork_receiver_cmd_tx, fork_receiver_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (auditor_tx, auditor_rx) = make_channel(_chan_depth);

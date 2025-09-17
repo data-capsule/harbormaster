@@ -336,6 +336,7 @@ where
                 if let Ok(RespType::Resp) = resp {            
                     debug!("Waiting for response!");
                     let mref: (PinnedMessage, LatencyProfile) = some_or_exit!(ack_rx.recv().await);
+                    // mref.1.force_print();
                     let mref = mref.0.as_ref();
                     if let Err(_) = tx_buf.write_u32(mref.1 as u32).await { break; }
                     if let Err(_) = tx_buf.write_all(&mref.0[..mref.1]).await { break; };

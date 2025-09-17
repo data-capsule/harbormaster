@@ -4,11 +4,11 @@ use std::{
 
 use app::PSLAppEngine;
 use cache_manager::CacheManager;
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use prost::Message as _;
 use tokio::{
     sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex},
-    task::JoinSet,
+    task::JoinSet, time::Instant,
 };
 
 pub use crate::consensus::batch_proposal::TxWithAckChanTag;
@@ -160,10 +160,13 @@ impl ServerContextType for PinnedPSLWorkerServerContext {
                 }
                 let client_tag = client_request.client_tag;
                 
+                let start_time = Instant::now();
                 self.client_request_tx
                     .send((client_request.tx, (ack_chan, client_tag, sender)))
                     .await
                     .expect("Channel send error");
+
+                trace!("Queue time: {:?}", start_time.elapsed());
 
                 return Ok(RespType::Resp);
             }
@@ -264,8 +267,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         let (backfill_request_tx, backfill_request_rx) = make_channel(_chan_depth as usize);
         let (fork_receiver_tx, fork_receiver_rx) = make_channel(_chan_depth as usize);
         let (vote_tx, vote_rx) = make_channel(_chan_depth as usize);
-        let (cache_tx, cache_rx) = unbounded_channel();
-        let (block_tx, block_rx) = unbounded_channel();
+        let (cache_tx, cache_rx) = tokio::sync::mpsc::channel(_chan_depth as usize);
+        let (block_tx, block_rx) = tokio::sync::mpsc::channel(_chan_depth as usize);
         let (command_tx, command_rx) = unbounded_channel();
         let (block_sequencer_tx, block_sequencer_rx) = make_channel(_chan_depth as usize);
         let (node_broadcaster_tx, node_broadcaster_rx) = make_channel(_chan_depth as usize);
