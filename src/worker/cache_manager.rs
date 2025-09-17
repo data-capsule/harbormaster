@@ -315,12 +315,21 @@ impl CacheManager {
         }
     }
 
-    async fn check_command_rx(command_rx: &mut UnboundedReceiver<CacheCommand>, blocked_on_vc_wait_is_some: bool) -> Option<CacheCommand> {
+    async fn check_command_rx(command_rx: &mut UnboundedReceiver<CacheCommand>, blocked_on_vc_wait_is_some: bool) -> Vec<CacheCommand> {
         if blocked_on_vc_wait_is_some {
             std::future::pending::<()>().await;
-            None
+            Vec::new()
         } else {
-            command_rx.recv().await
+            let mut commands = Vec::new();
+            let _n = command_rx.len();
+            if _n > 0 {
+                command_rx.recv_many(&mut commands, _n).await;
+            } else {
+                if let Some(command) = command_rx.recv().await {
+                    commands.push(command);
+                }
+            }
+            commands
         }
     }
 
@@ -348,6 +357,14 @@ impl CacheManager {
 
         tokio::select! {
             biased;
+            commands = Self::check_command_rx(&mut self.command_rx, block_on_vc_wait_is_some) => {
+                if block_on_vc_wait_is_some {
+                    error!("Command received while blocked on VC wait!!");
+                }
+                if commands.len() > 0 {
+                    self.handle_command(commands).await;
+                }
+            },
             _ = self.batch_timer.wait() => {
                 // This is safe to do here.
                 // The tick won't interrupt handle_command or handle_block's logic.
@@ -376,12 +393,7 @@ impl CacheManager {
                 self.block_on_read_snapshot = None;
                 trace!("Snapshot cleared");
             },
-            Some(command) = Self::check_command_rx(&mut self.command_rx, block_on_vc_wait_is_some) => {
-                if block_on_vc_wait_is_some {
-                    error!("Command received while blocked on VC wait!!");
-                }
-                self.handle_command(command).await;
-            },
+            
 
             Some((Some(tx), _)) = self.sequencer_request_rx.recv() => {
                 self.handle_sequencer_request(tx).await;
@@ -389,7 +401,7 @@ impl CacheManager {
             // It is important that command_rx be checked before commit_command_rx.
             Some(cmd) = self.commit_command_rx.recv() => {
                 if let CacheCommand::Commit(_, _) = cmd {
-                    self.handle_command(cmd).await;
+                    self.handle_command(vec![cmd]).await;
                 } else {
                     error!("Unexpected commit command: {:?}", cmd);
                 }
@@ -453,7 +465,8 @@ impl CacheManager {
         }
     }
 
-    async fn handle_command(&mut self, command: CacheCommand) {
+
+    async fn _handle_command_single(&mut self, command: CacheCommand) {
         match command {
             CacheCommand::Get(key, response_tx) => {
                 let res = self.cache.get(&key);
@@ -542,6 +555,11 @@ impl CacheManager {
             CacheCommand::ClearVC(vc) => {
                 let _ = self.block_sequencer_tx.send(SequencerCommand::MakeNewBlockToPropagateVC(vc)).await;
             }
+        }
+    }
+    async fn handle_command(&mut self, commands: Vec<CacheCommand>) {
+        for command in commands {
+            self._handle_command_single(command).await;
         }
     }
 

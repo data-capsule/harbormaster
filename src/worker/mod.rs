@@ -56,7 +56,7 @@ pub struct PSLWorkerServerContext {
     keystore: AtomicKeyStore,
     backfill_request_tx: Sender<ProtoBackfillQuery>,
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-    client_request_tx: UnboundedSender<TxWithAckChanTag>,
+    client_request_tx: Sender<TxWithAckChanTag>,
     sequencer_request_tx: Sender<TxWithAckChanTag>,
     staging_tx: Sender<VoteWithSender>,
 }
@@ -70,7 +70,7 @@ impl PinnedPSLWorkerServerContext {
         keystore: AtomicKeyStore,
         backfill_request_tx: Sender<ProtoBackfillQuery>,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-        client_request_tx: UnboundedSender<TxWithAckChanTag>,
+        client_request_tx: Sender<TxWithAckChanTag>,
         staging_tx: Sender<VoteWithSender>,
         sequencer_request_tx: Sender<TxWithAckChanTag>,
     ) -> Self {
@@ -162,7 +162,7 @@ impl ServerContextType for PinnedPSLWorkerServerContext {
                 
                 self.client_request_tx
                     .send((client_request.tx, (ack_chan, client_tag, sender)))
-                    // .await
+                    .await
                     .expect("Channel send error");
 
                 return Ok(RespType::Resp);
@@ -210,7 +210,7 @@ pub struct PSLWorker<E: ClientHandlerTask + Send + Sync + 'static> {
 impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
     pub fn new(config: PSLWorkerConfig) -> Self {
         let (client_request_tx, client_request_rx) =
-            unbounded_channel();
+            make_channel(config.rpc_config.channel_depth as usize);
         Self::mew(config, client_request_tx, client_request_rx)
     }
 
@@ -223,8 +223,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
     /// ```
     pub fn mew(
         config: PSLWorkerConfig,
-        client_request_tx: UnboundedSender<TxWithAckChanTag>,
-        client_request_rx: UnboundedReceiver<TxWithAckChanTag>,
+        client_request_tx: Sender<TxWithAckChanTag>,
+        client_request_rx: Receiver<TxWithAckChanTag>,
     ) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
         let _num_crypto_tasks = config.worker_config.num_crypto_workers;

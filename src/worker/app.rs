@@ -1,10 +1,11 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::Ok;
 use futures::{stream::FuturesUnordered, StreamExt};
 use hashbrown::HashSet;
 use itertools::Itertools;
 use log::{error, info, trace, warn};
+use nix::libc::sa_family_t;
 use num_bigint::{BigInt, Sign};
 use prost::Message as _;
 use tokio::{sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex}, task::JoinSet, time::Instant};
@@ -93,6 +94,10 @@ impl CacheConnector {
 
     pub async fn dispatch_lock_request(&mut self, key_and_is_read: &Vec<(CacheKey, bool)>) -> Result<(), CacheError> {
         // return std::result::Result::Ok(());
+        if key_and_is_read.len() == 0 {
+            return std::result::Result::Ok(());
+        }
+
         let mut ops = Vec::new();
         for (key, is_read) in key_and_is_read {
             let op_type = if *is_read {
@@ -136,7 +141,7 @@ impl CacheConnector {
 
         let start_time = Instant::now();
         let res = PinnedClient::send_and_await_reply(&self.blocking_client, &"sequencer1".to_string(), request.as_ref()).await;
-        error!("Lock request time: {:?}", start_time.elapsed());
+        trace!("Lock request time: {:?}", start_time.elapsed());
 
 
         if let Err(e) = res {
@@ -185,7 +190,7 @@ impl CacheConnector {
             let _ = self.cache_tx.send(CacheCommand::WaitForVC(vc.clone(), tx)).unwrap();
             rx.await.unwrap();
 
-            error!("VC wait time: {:?}", start_time.elapsed());
+            trace!("VC wait time: {:?}", start_time.elapsed());
 
             std::result::Result::Ok(())
         } else {
@@ -195,6 +200,9 @@ impl CacheConnector {
     }
 
     pub async fn dispatch_unlock_request(&mut self, mut keys_and_vcs: Vec<(CacheKey, VectorClock)>) {
+        if keys_and_vcs.len() == 0 {
+            return;
+        }
         // return;
         
         let op_type = ProtoTransactionOpType::Unblock;
@@ -239,7 +247,7 @@ impl CacheConnector {
         let sz = buf.len();
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-        self.cache_tx.send(CacheCommand::ClearVC(aggregate_vc)).unwrap();
+        // self.cache_tx.send(CacheCommand::ClearVC(aggregate_vc)).unwrap();
 
         let start_time = Instant::now();
         let err = PinnedClient::send_and_await_reply(&self.blocking_client, &"sequencer1".to_string(), request.as_ref()).await;
@@ -267,7 +275,7 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
     key_store: AtomicKeyStore,
     cache_tx: UnboundedSender<CacheCommand>,
     cache_commit_tx: Sender<CacheCommand>,
-    client_command_rx: UnboundedReceiver<TxWithAckChanTag>,
+    client_command_rx: Receiver<TxWithAckChanTag>,
     commit_tx_spawner: tokio::sync::broadcast::Sender<u64>,
     handles: JoinSet<()>,
     client_handler_phantom: PhantomData<T>,
@@ -275,7 +283,7 @@ pub struct PSLAppEngine<T: ClientHandlerTask> {
 }
 
 impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
-    pub fn new(config: AtomicPSLWorkerConfig, key_store: AtomicKeyStore, cache_tx: UnboundedSender<CacheCommand>, cache_commit_tx: Sender<CacheCommand>, client_command_rx: UnboundedReceiver<TxWithAckChanTag>, commit_tx_spawner: tokio::sync::broadcast::Sender<u64>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, key_store: AtomicKeyStore, cache_tx: UnboundedSender<CacheCommand>, cache_commit_tx: Sender<CacheCommand>, client_command_rx: Receiver<TxWithAckChanTag>, commit_tx_spawner: tokio::sync::broadcast::Sender<u64>) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         Self {
             config,
@@ -304,7 +312,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
         let client_config = AtomicConfig::new(app.config.get().to_config());
 
-        let mut handler_txs = Vec::new();
+        // let mut handler_txs = Vec::new();
 
 
         for id in 0..app.config.get().worker_config.num_worker_threads_per_worker {
@@ -316,8 +324,8 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
             let _reply_tx = reply_tx.clone();
             let (total_work_tx, total_work_rx) = make_channel(_chan_depth);
             total_work_txs.push(total_work_tx);
-            let (handler_tx, mut handler_rx) = tokio::sync::mpsc::channel(_chan_depth);
-            handler_txs.push(handler_tx);
+            let handler_rx = app.client_command_rx.clone();
+            
 
 
             app.handles.spawn(async move {
@@ -326,8 +334,8 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
                 loop {
                     tokio::select! {
                         biased;
-                        Some(commands) = handler_rx.recv() => {
-                            handler_task.on_client_request(commands, &_reply_tx).await;
+                        Some(command) = handler_rx.recv() => {
+                            handler_task.on_client_request(vec![command], &_reply_tx).await;
                         }
                         Some(_tx) = total_work_rx.recv() => {
                             trace!("Locked keys: {:?}", handler_task.get_locked_keys());
@@ -358,7 +366,6 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
                             pending_results.push((result, ack_chan, seq_num));
                         }
                     }
-
                     for (result, ack_chan, seq_num) in &pending_results {
                         if *seq_num > commit_seq_num {
                             continue;
@@ -396,37 +403,35 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
         let cmd_rx = &mut app.client_command_rx;
         let mut __rr_cnt = 0;
         loop {
-            let cmd_len = cmd_rx.len();
-            if cmd_len > 0 {
-                let mut cmds = Vec::new();
-                cmd_rx.recv_many(&mut cmds, cmd_len).await;
+            // let cmd_len = cmd_rx.len();
+            // if cmd_len > 0 {
+            //     let mut cmds = Vec::new();
+            //     cmd_rx.recv_many(&mut cmds, cmd_len).await;
                 
-                handler_txs[__rr_cnt % handler_txs.len()].send(cmds).await;
-                __rr_cnt += 1;
+            //     handler_txs[__rr_cnt % handler_txs.len()].send(cmds).await;
+            //     __rr_cnt += 1;
 
-                continue;
-            }
-            tokio::select! {
-                biased;
-                Some(cmd) = cmd_rx.recv() => {
-                    handler_txs[__rr_cnt % handler_txs.len()].send(vec![cmd]).await;
-                    __rr_cnt += 1;
-                }
-                // _ = app.log_timer.wait() => {
-                //     let mut total_work = 0;
-                //     for tx in &total_work_txs {
-                //         let (_tx, _rx) = tokio::sync::oneshot::channel();
-                //         tx.send(_tx).await.unwrap();
+            //     continue;
+            // }
+            // tokio::select! {
+            //     biased;
+            //     Some(cmd) = cmd_rx.recv() => {
+            //         handler_txs[__rr_cnt % handler_txs.len()].send(vec![cmd]).await;
+            //         __rr_cnt += 1;
+            //     }
+            //     // _ = app.log_timer.wait() => {
+            //     //     let mut total_work = 0;
+            //     //     for tx in &total_work_txs {
+            //     //         let (_tx, _rx) = tokio::sync::oneshot::channel();
+            //     //         tx.send(_tx).await.unwrap();
 
-                //         total_work += _rx.await.unwrap();
-                //     }
+            //     //         total_work += _rx.await.unwrap();
+            //     //     }
 
-                //     info!("Total requests processed: {}", total_work);
-                // }
-            }
-            // app.log_timer.wait().await;
-
-            
+            //     //     info!("Total requests processed: {}", total_work);
+            //     // }
+            // }
+            app.log_timer.wait().await;
         }
         Ok(())
     }
@@ -517,32 +522,41 @@ impl ClientHandlerTask for KVSTask {
         }
 
 
+        let start_time = Instant::now();
         for key in &locked_keys {
             self.cache_connector.dispatch_lock_request(&vec![key.clone()]).await;
         }
+        error!("Lock request time: {:?}", start_time.elapsed());
 
 
 
+        let start_time = Instant::now();
 
         for (on_receive, resp) in tx_phases_resp {
-    
+            // for _ in 0..99 {
+            //     self.execute_ops(on_receive.ops.as_ref()).await;
+            // }
     
             if let std::result::Result::Ok((results, seq_num)) = self.execute_ops(on_receive.ops.as_ref()).await {
                 response_vec.push(Response::Receipt(resp, results, seq_num));
-                continue;
+            } else {
+                response_vec.push(Response::Invalid(resp));
             }
     
-            response_vec.push(Response::Invalid(resp));
-            continue;
         }
+
+        trace!("Execute ops time: {:?}", start_time.elapsed());
 
         // Group commit. Supposed to improve throughput.
         locked_keys.reverse();
+        let start_time = Instant::now();
         let vc = self.cache_connector.dispatch_commit_request(locked_keys.len() > 0).await;
         trace!("Committed with VC: {} Locked keys: {:?}", vc,
             locked_keys.iter().map(|(key, _)| String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone()))).collect::<Vec<_>>());
         self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|(key, _)| (key.clone(), vc.clone())).collect()).await;
-        
+        trace!("Commit and unlock time: {:?}", start_time.elapsed());
+
+        let start_time = Instant::now();
         for response in response_vec {
             match response {
                 Response::Invalid(resp) => {
@@ -553,6 +567,7 @@ impl ClientHandlerTask for KVSTask {
                 }
             }
         }
+        error!("Reply time: {:?}", start_time.elapsed());
 
         Ok(())
 
@@ -561,6 +576,8 @@ impl ClientHandlerTask for KVSTask {
 
 impl KVSTask {
     async fn buffer_lock_requests(&mut self, ops: &Vec<ProtoTransactionOp>) {
+        // return;
+
         for op in ops {
             let op_type = op.op_type();
             match op_type {
