@@ -4,7 +4,7 @@ use log::{error, info};
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 use prost::Message as _;
 
-use crate::{config::AtomicConfig, proto::{client::ProtoClientRequest, consensus::{ProtoHeartbeat, ProtoVectorClock}}, rpc::{server::MsgAckChan, SenderType}, sequencer::controller::ControllerCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
+use crate::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::{client::ProtoClientRequest, consensus::{ProtoHeartbeat, ProtoVectorClock}}, rpc::{server::MsgAckChan, SenderType}, sequencer::controller::ControllerCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
 
 #[derive(Debug, Clone)]
 pub enum LockServerCommand {
@@ -28,20 +28,20 @@ struct LockState {
 
 pub struct LockServer {
     config: AtomicConfig,
-    command_rx: UnboundedReceiver<(LockServerCommand, SenderType, MsgAckChan, u64)>,
+    command_rx: UnboundedReceiver<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
     heartbeat_rx: UnboundedReceiver<(ProtoHeartbeat, SenderType)>,
     heartbeat_vc: HashMap<String, VectorClock>,
 
     controller_tx: Sender<ControllerCommand>,
 
     lock_map: HashMap<CacheKey, LockState>,
-    lock_request_buffer: HashMap<CacheKey, VecDeque<(LockServerCommand, SenderType, MsgAckChan, u64)>>,
+    lock_request_buffer: HashMap<CacheKey, VecDeque<(LockServerCommand, SenderType, Option<MsgAckChanWithTag>)>>,
 
     log_timer: Arc<Pin<Box<ResettableTimer>>>,
 }
 
 impl LockServer {
-    pub fn new(config: AtomicConfig, heartbeat_rx: UnboundedReceiver<(ProtoHeartbeat, SenderType)>, command_rx: UnboundedReceiver<(LockServerCommand, SenderType, MsgAckChan, u64)>, controller_tx: Sender<ControllerCommand>) -> Self {
+    pub fn new(config: AtomicConfig, heartbeat_rx: UnboundedReceiver<(ProtoHeartbeat, SenderType)>, command_rx: UnboundedReceiver<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>, controller_tx: Sender<ControllerCommand>) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
         Self {
             config,
@@ -133,7 +133,10 @@ impl LockServer {
                 .filter(|(_, requests)| requests.len() > 0)
                 .map(|(key, requests)| (String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone())), 
                     self.lock_map.get(key).unwrap().locker.clone(),
-                    requests.iter().map(|(_, sender, _, _)| sender.clone()).collect::<Vec<_>>()))
+                    requests.iter().map(|(_, sender, ack_chan_tag)| (sender.clone(), match ack_chan_tag {
+                        Some((_, tag, _)) => *tag as i64,
+                        None => -1,
+                    })).collect::<Vec<_>>()))
                 .collect::<Vec<_>>()
             );
 
@@ -143,30 +146,38 @@ impl LockServer {
 
     }
 
-    async fn process_cmd(&mut self, cmds: Vec<(LockServerCommand, SenderType, MsgAckChan, u64)>) -> Result<(), ()> {
-        let mut locking_candidates = HashSet::new();
-        
-        for (cmd, sender, ack_chan, client_tag) in cmds {
-            let key = match cmd {
-                LockServerCommand::ReleaseLock(key, vc) => {
-                    self.release_lock(key.clone(), sender.clone(), vc);
-                    self.controller_tx.send(ControllerCommand::UnlockAck(ack_chan.clone(), client_tag)).await.unwrap();
-                    key.clone()
-                },
-                LockServerCommand::AcquireReadLock(ref key) | LockServerCommand::AcquireWriteLock(ref key) => {
-                    let _key = key.clone();
-                    self.buffer_lock_request(cmd, sender.clone(), ack_chan.clone(), client_tag);
-                    _key
-                }
-            };
+    async fn process_cmd(&mut self, cmds: Vec<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>) -> Result<(), ()> {
+        for (lk_cmds, sender, ack_chan, client_tag) in cmds {
+            let _n = lk_cmds.len() as isize;
 
-            locking_candidates.insert(key.clone());
-        }
+            for i in 0.._n {
+                let cmd = &lk_cmds[i as usize];
+                let key = match cmd {
+                    LockServerCommand::ReleaseLock(key, vc) => {
+                        self.release_lock(key.clone(), sender.clone(), vc.clone());
 
-        for key in locking_candidates.drain() {
-            loop {
-                if !self.maybe_grant_locks(key.clone()).await {
-                    break;
+                        if i == _n - 1 {
+                            self.controller_tx.send(ControllerCommand::UnlockAck(Some((ack_chan.clone(), client_tag, sender.clone())))).await.unwrap();
+                        } else {
+                            self.controller_tx.send(ControllerCommand::UnlockAck(None)).await.unwrap();
+                        }
+                        key.clone()
+                    },
+                    LockServerCommand::AcquireReadLock(ref key) | LockServerCommand::AcquireWriteLock(ref key) => {
+                        let _key = key.clone();
+                        if i == _n - 1 {
+                            self.buffer_lock_request(cmd.clone(), sender.clone(), Some((ack_chan.clone(), client_tag, sender.clone())));
+                        } else {
+                            self.buffer_lock_request(cmd.clone(), sender.clone(), None);
+                        }
+                        _key
+                    }
+                };
+
+                loop {
+                    if !self.maybe_grant_locks(key.clone()).await {
+                        break;
+                    }
                 }
             }
         }
@@ -179,7 +190,7 @@ impl LockServer {
     /// Precondition:
     /// - is_acquirable(key) == true
     /// - => lock_map.get(key).is_none() or lock_map.get(key).locker == LockType::Unlocked or lock_map.get(key).locker == LockType::Read(_)
-    async fn acquire_read_lock(&mut self, key: CacheKey, sender: SenderType, ack_chan: MsgAckChan, client_tag: u64) {
+    async fn acquire_read_lock(&mut self, key: CacheKey, sender: SenderType, ack_chan_tag: Option<MsgAckChanWithTag>) {
         let lock_state = self.lock_map.entry(key.clone()).or_insert(LockState {
             locker: LockType::Unlocked,
             min_vc: VectorClock::new(),
@@ -202,7 +213,7 @@ impl LockServer {
 
         let min_vc = lock_state.min_vc.clone();
 
-        self.notify(key, sender, min_vc, ack_chan, client_tag).await;
+        self.notify(key, sender, min_vc, ack_chan_tag).await;
 
     }
 
@@ -210,7 +221,7 @@ impl LockServer {
     /// Precondition:
     /// - is_acquirable(key) == true 
     /// - => lock_map.get(key).is_none() or lock_map.get(key).locker == LockType::Unlocked
-    async fn acquire_write_lock(&mut self, key: CacheKey, sender: SenderType, ack_chan: MsgAckChan, client_tag: u64) {
+    async fn acquire_write_lock(&mut self, key: CacheKey, sender: SenderType, ack_chan_tag: Option<MsgAckChanWithTag>) {
         let lock_state = self.lock_map.entry(key.clone()).or_insert(LockState {
             locker: LockType::Unlocked,
             min_vc: VectorClock::new(),
@@ -220,7 +231,7 @@ impl LockServer {
 
 
         let min_vc = lock_state.min_vc.clone();
-        self.notify(key, sender, min_vc, ack_chan, client_tag).await;
+        self.notify(key, sender, min_vc, ack_chan_tag).await;
     }
 
 
@@ -269,7 +280,7 @@ impl LockServer {
         }
     }
 
-    fn buffer_lock_request(&mut self, cmd: LockServerCommand, sender: SenderType, ack_chan: MsgAckChan, client_tag: u64) {
+    fn buffer_lock_request(&mut self, cmd: LockServerCommand, sender: SenderType, ack_chan_tag: Option<MsgAckChanWithTag>) {
         let key = match &cmd {
             LockServerCommand::AcquireReadLock(key) | LockServerCommand::AcquireWriteLock(key) => {
                 key.clone()
@@ -279,7 +290,7 @@ impl LockServer {
             }
         };
 
-        self.lock_request_buffer.entry(key).or_insert(VecDeque::new()).push_back((cmd, sender, ack_chan, client_tag));
+        self.lock_request_buffer.entry(key).or_insert(VecDeque::new()).push_back((cmd, sender, ack_chan_tag));
     }
 
     async fn maybe_grant_locks(&mut self, key: CacheKey) -> bool {
@@ -288,25 +299,25 @@ impl LockServer {
         };
 
 
-        let (cmd, sender, ack_chan, client_tag) = if pending_requests.len() > 0 {
+        let (cmd, sender, ack_chan_tag) = if pending_requests.len() > 0 {
             if !Self::is_acquirable(&self.lock_map, pending_requests.front().unwrap(), &self.heartbeat_vc) {
                 return false;
             }
-            let Some((cmd, sender, ack_chan, client_tag)) = pending_requests.pop_front() else {
+            let Some((cmd, sender, ack_chan_tag)) = pending_requests.pop_front() else {
                 unreachable!();
             };
 
-            (cmd, sender, ack_chan, client_tag)
+            (cmd, sender, ack_chan_tag)
         } else {
             return false;
         };
 
         match cmd {
             LockServerCommand::AcquireReadLock(key) => {
-                self.acquire_read_lock(key, sender, ack_chan, client_tag).await;
+                self.acquire_read_lock(key, sender, ack_chan_tag).await;
             },
             LockServerCommand::AcquireWriteLock(key) => {
-                self.acquire_write_lock(key, sender, ack_chan, client_tag).await;
+                self.acquire_write_lock(key, sender, ack_chan_tag).await;
             },
             _ => {
                 unreachable!();
@@ -318,7 +329,7 @@ impl LockServer {
 
     /// If it is a write lock request, locktype must be Unlocked.
     /// If it is a read lock request, locktype must be Unlocked or Read(_).
-    fn is_acquirable(lock_map: &HashMap<CacheKey, LockState>, cmd: &(LockServerCommand, SenderType, MsgAckChan, u64), heartbeat_vc: &HashMap<String, VectorClock>) -> bool {
+    fn is_acquirable(lock_map: &HashMap<CacheKey, LockState>, cmd: &(LockServerCommand, SenderType, Option<MsgAckChanWithTag>), heartbeat_vc: &HashMap<String, VectorClock>) -> bool {
         // let __default_vc = VectorClock::new();
         // let heartbeat_vc = __default_vc; // heartbeat_vc.get(&cmd.1.to_name_and_sub_id().0).unwrap_or(&__default_vc);
         let key = match &cmd.0 {
@@ -335,12 +346,24 @@ impl LockServer {
             None => (&LockType::Unlocked, &VectorClock::new()),
         };
 
+
         match &cmd.0 {
             LockServerCommand::AcquireReadLock(_) => {
                 matches!(lock_type, LockType::Unlocked | LockType::Read(_)) //  && min_vc <= heartbeat_vc
             }
             LockServerCommand::AcquireWriteLock(_) => {
-                matches!(lock_type, LockType::Unlocked) // && min_vc <= heartbeat_vc
+                if let LockType::Unlocked = lock_type {
+                    true
+                } else if let LockType::Write(current_locker) = lock_type {
+                    if current_locker != &cmd.1 {
+                        false
+                    } else {
+                        error!("Weird edge case: Trying to lock while holding a write lock. {:?}", current_locker);
+                        true
+                    }
+                } else {
+                    false
+                }
             }
             _ => {
                 unreachable!();
@@ -348,8 +371,8 @@ impl LockServer {
         }
     }
 
-    async fn notify(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan: MsgAckChan, client_tag: u64) {
-        let cmd = ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan, client_tag);
+    async fn notify(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan_tag: Option<MsgAckChanWithTag>) {
+        let cmd = ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan_tag);
         self.controller_tx.send(cmd).await.unwrap();
     }
 
@@ -378,7 +401,9 @@ impl LockServer {
 
         let mut only_release_commands = true;
 
-        let res = phase.ops.iter()
+        let mut unlock_count = 0;
+
+        let res: Vec<LockServerCommand> = phase.ops.iter()
             .filter_map(|op| {
                 match op.op_type() {
                     crate::proto::execution::ProtoTransactionOpType::Read | crate::proto::execution::ProtoTransactionOpType::Write => {
@@ -400,6 +425,7 @@ impl LockServer {
                         if op.operands.len() != 2 {
                             return None;
                         }
+                        unlock_count += 1;
 
                         let key = op.operands[0].clone();
                         let vc = ProtoVectorClock::decode(op.operands[1].as_slice()).unwrap();
@@ -412,6 +438,9 @@ impl LockServer {
             })
             .collect();
 
+        if unlock_count > 1 {
+            error!("Unlock count: {}", unlock_count);
+        }
         (only_release_commands, res)
     }
 }

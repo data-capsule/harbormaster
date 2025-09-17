@@ -3,6 +3,7 @@ use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Durati
 use anyhow::Ok;
 use futures::{stream::FuturesUnordered, StreamExt};
 use hashbrown::HashSet;
+use itertools::Itertools;
 use log::{error, info, trace, warn};
 use num_bigint::{BigInt, Sign};
 use prost::Message as _;
@@ -68,17 +69,17 @@ impl CacheConnector {
         &self,
         key: Vec<u8>,
         value: Vec<u8>,
-    ) -> anyhow::Result<(u64 /* lamport ts */, tokio::sync::oneshot::Receiver<u64 /* block seq num */>), CacheError> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+    ) -> anyhow::Result<(u64 /* lamport ts */, Option<tokio::sync::oneshot::Receiver<u64 /* block seq num */>>), CacheError> {
+        // let (tx, rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
-        let command = CacheCommand::Put(key.clone(), value, val_hash, BlockSeqNumQuery::WaitForSeqNum(tx), response_tx);
+        let command = CacheCommand::Put(key.clone(), value, val_hash, BlockSeqNumQuery::DontBother, response_tx);
 
 
         self.cache_tx.send(command).unwrap();
 
         let result = response_rx.await.unwrap()?;
-        std::result::Result::Ok((result, rx))
+        std::result::Result::Ok((result, None))
     }
 
     pub async fn dispatch_commit_request(&self, force_prepare: bool) -> VectorClock {
@@ -90,24 +91,25 @@ impl CacheConnector {
         vc
     }
 
-    pub async fn dispatch_lock_request(&mut self, key: Vec<u8>, is_read: bool) -> Result<(), CacheError> {
+    pub async fn dispatch_lock_request(&mut self, key_and_is_read: &Vec<(CacheKey, bool)>) -> Result<(), CacheError> {
         // return std::result::Result::Ok(());
-        
-        let ____key = String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone()));
+        let mut ops = Vec::new();
+        for (key, is_read) in key_and_is_read {
+            let op_type = if *is_read {
+                ProtoTransactionOpType::Read
+            } else {
+                ProtoTransactionOpType::Write
+            };
 
-        let start_time = Instant::now();
-        let op_type = if is_read {
-            ProtoTransactionOpType::Read
-        } else {
-            ProtoTransactionOpType::Write
-        };
+            ops.push(ProtoTransactionOp {
+                op_type: op_type as i32,
+                operands: vec![key.clone()],
+            });
+        }
 
         let tx = ProtoTransaction {
             on_crash_commit: Some(ProtoTransactionPhase {
-                ops: vec![ProtoTransactionOp {
-                    op_type: op_type as i32,
-                    operands: vec![key],
-                }],
+                ops,
             }),
             on_byzantine_commit: None,
             on_receive: None,
@@ -132,8 +134,11 @@ impl CacheConnector {
         let sz = buf.len();
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
+        let start_time = Instant::now();
         let res = PinnedClient::send_and_await_reply(&self.blocking_client, &"sequencer1".to_string(), request.as_ref()).await;
-        
+        error!("Lock request time: {:?}", start_time.elapsed());
+
+
         if let Err(e) = res {
             return Err(CacheError::LockNotAcquirable);
         }
@@ -174,9 +179,13 @@ impl CacheConnector {
 
             let vc = VectorClock::from(Some(proto_vc));
             let (tx, rx) = oneshot::channel();
+
+            let start_time = Instant::now();
+
             let _ = self.cache_tx.send(CacheCommand::WaitForVC(vc.clone(), tx)).unwrap();
             rx.await.unwrap();
-            trace!("Lock request time: {:?} for key: {:?} vc: {}. VC completed!", start_time.elapsed(), ____key, vc);
+
+            error!("VC wait time: {:?}", start_time.elapsed());
 
             std::result::Result::Ok(())
         } else {
@@ -429,7 +438,7 @@ pub struct KVSTask {
     id: usize,
     total_work: usize,
 
-    locked_keys: Vec<CacheKey>,
+    locked_keys: Vec<(CacheKey, bool /* is_read */)>,
 }
 
 enum Response {
@@ -448,7 +457,7 @@ impl ClientHandlerTask for KVSTask {
     }
 
     fn get_locked_keys(&self) -> Vec<CacheKey> {
-        self.locked_keys.clone()
+        self.locked_keys.iter().map(|(key, _)| key.clone()).collect()
     }
 
     fn get_cache_connector(&self) -> &CacheConnector {
@@ -465,6 +474,8 @@ impl ClientHandlerTask for KVSTask {
 
     async fn on_client_request(&mut self, requests: Vec<TxWithAckChanTag>, reply_handler_tx: &Sender<UncommittedResultSet>) -> anyhow::Result<()> {
         let mut response_vec = Vec::new();
+
+        let mut tx_phases_resp = Vec::new();
 
         for request in requests {
 
@@ -489,16 +500,48 @@ impl ClientHandlerTask for KVSTask {
             }
     
             let on_receive = req.on_receive.as_ref().unwrap();
+
+            self.buffer_lock_requests(on_receive.ops.as_ref()).await;
+
+            tx_phases_resp.push((on_receive.clone(), resp.clone()));
+        }
+
+        // Conservative 2PL: Sort the locks.
+        let mut locked_keys = self.locked_keys.drain(..)
+            .collect::<HashSet<_>>() // Remove duplicates.
+            .into_iter()
+            .sorted_by_key(|(key, _)| key.clone()).collect::<Vec<_>>();
+
+        if locked_keys.len() > 1 {
+            error!("Locked keys size: {}", locked_keys.len());
+        }
+
+
+        for key in &locked_keys {
+            self.cache_connector.dispatch_lock_request(&vec![key.clone()]).await;
+        }
+
+
+
+
+        for (on_receive, resp) in tx_phases_resp {
     
     
             if let std::result::Result::Ok((results, seq_num)) = self.execute_ops(on_receive.ops.as_ref()).await {
-                response_vec.push(Response::Receipt(resp.clone(), results, seq_num));
+                response_vec.push(Response::Receipt(resp, results, seq_num));
                 continue;
             }
     
-            response_vec.push(Response::Invalid(resp.clone()));
+            response_vec.push(Response::Invalid(resp));
             continue;
         }
+
+        // Group commit. Supposed to improve throughput.
+        locked_keys.reverse();
+        let vc = self.cache_connector.dispatch_commit_request(locked_keys.len() > 0).await;
+        trace!("Committed with VC: {} Locked keys: {:?}", vc,
+            locked_keys.iter().map(|(key, _)| String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone()))).collect::<Vec<_>>());
+        self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|(key, _)| (key.clone(), vc.clone())).collect()).await;
         
         for response in response_vec {
             match response {
@@ -517,6 +560,21 @@ impl ClientHandlerTask for KVSTask {
 }
 
 impl KVSTask {
+    async fn buffer_lock_requests(&mut self, ops: &Vec<ProtoTransactionOp>) {
+        for op in ops {
+            let op_type = op.op_type();
+            match op_type {
+                ProtoTransactionOpType::Read => {
+                    self.locked_keys.push((op.operands[0].clone(), false));
+                }
+                ProtoTransactionOpType::Write => {
+                    self.locked_keys.push((op.operands[0].clone(), false));
+                }
+                _ => {}
+            }
+        }
+    }
+
     async fn execute_ops(&mut self, ops: &Vec<ProtoTransactionOp>) -> Result<(Vec<ProtoTransactionOpResult>, Option<u64>), anyhow::Error> {
         let mut atleast_one_write = false;
         let mut last_write_index = 0;
@@ -536,19 +594,12 @@ impl KVSTask {
             }
         }
 
-        let mut locked_keys = Vec::new();
-
         for op in ops {
             let op_type = op.op_type();
 
             match op_type {
                 ProtoTransactionOpType::Write => {
                     let key = op.operands[0].clone();
-                    locked_keys.push(key.clone());
-                    self.locked_keys.push(key.clone());
-
-                    self.cache_connector.dispatch_lock_request(key.clone(), false).await;
-
                     let value = op.operands[1].clone();
                     let res = self.cache_connector.dispatch_write_request(key, value).await;
                     if let std::result::Result::Err(e) = res {
@@ -556,7 +607,9 @@ impl KVSTask {
                     }
 
                     let (_, block_seq_num_rx) = res.unwrap();
-                    block_seq_num_rx_vec.push(block_seq_num_rx);
+                    if let Some(block_seq_num_rx) = block_seq_num_rx {
+                        block_seq_num_rx_vec.push(block_seq_num_rx);
+                    }
                     results.push(ProtoTransactionOpResult {
                         success: true,
                         values: vec![],
@@ -564,9 +617,6 @@ impl KVSTask {
                 },
                 ProtoTransactionOpType::Read => {
                     let key = op.operands[0].clone();
-                    locked_keys.push(key.clone());
-                    self.locked_keys.push(key.clone());
-                    self.cache_connector.dispatch_lock_request(key.clone(), false).await;
                     match self.cache_connector.dispatch_read_request(key).await {
                         std::result::Result::Ok((value, seq_num)) => {
                             results.push(ProtoTransactionOpResult {
@@ -587,32 +637,20 @@ impl KVSTask {
             
         }
 
-        // Must unlock in reverse order.
-        locked_keys.reverse();
-        for _lock in &locked_keys {
-            let lk = self.locked_keys.pop().expect("Locked keys should not be empty");
-            assert_eq!(&lk, _lock);
-        }
-        
-        let vc = self.cache_connector.dispatch_commit_request(locked_keys.len() > 0).await;
-        trace!("Committed with VC: {} Locked keys: {:?}", vc,
-            locked_keys.iter().map(|key| String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone()))).collect::<Vec<_>>());
-        self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|key| (key.clone(), vc.clone())).collect()).await;
+        // if atleast_one_write {
 
-        if atleast_one_write {
+        //     // Find the highest block seq num needed.
+        //     while let Some(seq_num) = block_seq_num_rx_vec.next().await {
+        //         if seq_num.is_err() {
+        //             continue;
+        //         }
 
-            // Find the highest block seq num needed.
-            while let Some(seq_num) = block_seq_num_rx_vec.next().await {
-                if seq_num.is_err() {
-                    continue;
-                }
+        //         let seq_num = seq_num.unwrap();
+        //         highest_committed_block_seq_num_needed = std::cmp::max(highest_committed_block_seq_num_needed, seq_num);
+        //     }
 
-                let seq_num = seq_num.unwrap();
-                highest_committed_block_seq_num_needed = std::cmp::max(highest_committed_block_seq_num_needed, seq_num);
-            }
-
-            return Ok((results, Some(highest_committed_block_seq_num_needed)));
-        }
+        //     return Ok((results, Some(highest_committed_block_seq_num_needed)));
+        // }
 
         Ok((results, None))
     }

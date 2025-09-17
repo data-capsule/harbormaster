@@ -19,7 +19,7 @@ pub struct SequencerContext {
     config: AtomicConfig,
     keystore: AtomicKeyStore,
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-    lock_server_tx: UnboundedSender<(LockServerCommand, SenderType, MsgAckChan, u64)>,
+    lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
     heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
     heartbeat_handler_tx: UnboundedSender<(ProtoHeartbeat, SenderType)>,
 }
@@ -32,7 +32,7 @@ impl PinnedSequencerContext {
         config: AtomicConfig,
         keystore: AtomicKeyStore,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
-        lock_server_tx: UnboundedSender<(LockServerCommand, SenderType, MsgAckChan, u64)>,
+        lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
         heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
         heartbeat_handler_tx: UnboundedSender<(ProtoHeartbeat, SenderType)>,
     ) -> Self {
@@ -97,7 +97,7 @@ impl ServerContextType for PinnedSequencerContext {
             crate::proto::rpc::proto_payload::Message::ClientRequest(proto_client_request) => {
                 let client_tag = proto_client_request.client_tag;
                 let (only_release_commands, lock_server_command) = LockServer::to_lock_server_command(proto_client_request);
-                self.lock_server_tx.send((lock_server_command[0].clone(), sender, ack_chan, client_tag))
+                self.lock_server_tx.send((lock_server_command, sender, ack_chan, client_tag))
                     .expect("Channel send error");
                 // return Ok(if !only_release_commands { RespType::Resp } else { RespType::NoResp });
                 return Ok(RespType::Resp);
@@ -157,8 +157,8 @@ impl SequencerNode {
         config: Config,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         fork_receiver_rx: Receiver<(ProtoAppendEntries, SenderType)>,
-        lock_server_tx: UnboundedSender<(LockServerCommand, SenderType, MsgAckChan, u64)>,
-        lock_server_rx: UnboundedReceiver<(LockServerCommand, SenderType, MsgAckChan, u64)>,
+        lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
+        lock_server_rx: UnboundedReceiver<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
     ) -> Self {
         let _chan_depth = config.rpc_config.channel_depth as usize;
         let _num_crypto_tasks = config.consensus_config.num_crypto_workers;

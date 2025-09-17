@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
 
 use log::{debug, info, trace, warn};
 use tokio::sync::Mutex;
 use prost::Message as _;
 
-use crate::{config::AtomicConfig, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::{LatencyProfile, MsgAckChan}, PinnedMessage, SenderType}, utils::channel::Receiver, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
+use crate::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::{LatencyProfile, MsgAckChan}, PinnedMessage, SenderType}, utils::channel::Receiver, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
 
 pub enum ControllerCommand {
     BlockAllWorkers,
@@ -12,8 +12,8 @@ pub enum ControllerCommand {
     UnblockAllWorkers,
 
     /// This is used to grant release-consistent locks to a worker.
-    BlockingLockAcquire(CacheKey, SenderType, VectorClock, MsgAckChan, u64),
-    UnlockAck(MsgAckChan, u64),
+    BlockingLockAcquire(CacheKey, SenderType, VectorClock, Option<MsgAckChanWithTag>),
+    UnlockAck(Option<MsgAckChanWithTag>),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
@@ -30,6 +30,7 @@ pub struct Controller {
 
     blocking_state: BlockingState,
 
+    bulk_lock_buffer: HashMap<SenderType, VecDeque<(CacheKey, VectorClock)>>,
     __client_tag_counter: u64,
 }
 
@@ -41,6 +42,7 @@ impl Controller {
             command_rx1,
             command_rx2,
             blocking_state: BlockingState::Unblocked,
+            bulk_lock_buffer: HashMap::new(),
             __client_tag_counter: 0,
         }
     }
@@ -73,18 +75,22 @@ impl Controller {
             ControllerCommand::UnblockAllWorkers => {
                 self.unblock_all_workers().await;
             }
-            ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan, client_tag) => {
-                self.blocking_lock_acquire(key, sender, vc, ack_chan, client_tag).await;
+            ControllerCommand::BlockingLockAcquire(key, sender, vc, ack_chan_tag) => {
+                self.blocking_lock_acquire(key, sender, vc, ack_chan_tag).await;
             }
-            ControllerCommand::UnlockAck(ack_chan, client_tag) => {
-                self.unlock_ack(ack_chan, client_tag).await;
+            ControllerCommand::UnlockAck(ack_chan_tag) => {
+                self.unlock_ack(ack_chan_tag).await;
             }
         }
 
         Ok(())
     }
 
-    async fn unlock_ack(&mut self, ack_chan: MsgAckChan, client_tag: u64) {
+    async fn unlock_ack(&mut self, ack_chan_tag: Option<MsgAckChanWithTag>) {
+        if ack_chan_tag.is_none() {
+            return;
+        }
+        let (ack_chan, client_tag, _) = ack_chan_tag.unwrap();
         let reply = ProtoClientReply {
             client_tag,
             reply: Some(crate::proto::client::proto_client_reply::Reply::Receipt(ProtoTransactionReceipt {
@@ -199,12 +205,28 @@ impl Controller {
 
     }
 
-    async fn blocking_lock_acquire(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan: MsgAckChan, client_tag: u64) {
+    async fn blocking_lock_acquire(&mut self, key: CacheKey, sender: SenderType, vc: VectorClock, ack_chan_tag: Option<MsgAckChanWithTag>) {
         // if self.blocking_state == BlockingState::Blocked {
         //     return;
         // }
         trace!("Blocking worker {:?} till VC {} to acquire lock on {}.", sender, vc, String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone())));
 
+        self.bulk_lock_buffer.entry(sender.clone()).or_insert(VecDeque::new()).push_back((key.clone(), vc.clone()));
+        if ack_chan_tag.is_none() {
+            return;
+        }
+
+        let Some(bulk_lock_buffer) = self.bulk_lock_buffer.get_mut(&sender) else {
+            unreachable!();
+        };
+        let mut vc = VectorClock::new();
+        for (_key, _vc) in bulk_lock_buffer.drain(..) {
+            for (sender, seq_num) in _vc.iter() {
+                vc.advance(sender.clone(), *seq_num);
+            }
+        }
+
+        let (ack_chan, client_tag, _) = ack_chan_tag.unwrap();
         let reply = ProtoClientReply {
             client_tag,
             reply: Some(crate::proto::client::proto_client_reply::Reply::Receipt(ProtoTransactionReceipt {
