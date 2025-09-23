@@ -77,10 +77,10 @@ use rand::prelude::*;
 use rand_chacha::ChaCha20Rng;
 use rand_distr::Normal;
 
-use crate::{client::workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode}, config::Smallbank, proto::execution::{ProtoTransaction, ProtoTransactionResult}};
+use crate::{client::workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode}, config::Smallbank, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
+#[derive(Clone)]
 enum TxOpType {
-    CreateAccount,
     Balance,
     DepositChecking,
     TransactSavings,
@@ -141,39 +141,208 @@ impl SmallbankGenerator {
         }
     }
 
-    fn get_next_custid(&mut self) -> u64 {
+    fn get_rand_custid(&mut self) -> u64 {
         self.custid_gen_dist.sample(&mut self.rng)
     }
 
-    fn get_next_balance(&mut self) -> f64 {
-        self.balance_gen_dist.sample(&mut self.rng)
+    fn get_rand_balance(&mut self) -> f64 {
+        let balance = self.balance_gen_dist.sample(&mut self.rng);
+
+        // Clip the balance to the min and max balance.
+        balance.clamp(self.config.min_balance, self.config.max_balance)
     }
 
-    fn get_next_name(&mut self) -> String {
-        format!("name{}", self.get_next_custid())
+    fn get_name_from_custid(&self, custid: u64) -> String {
+        format!("name{}", custid)
+    }
+
+    fn get_name_table_key(&self, custid: u64) -> String {
+        format!("NAME:{}", custid)
+    }
+
+    fn get_savings_table_key(&self, custid: u64) -> String {
+        format!("SAVINGS:{}", custid)
+    }
+
+    fn get_checking_table_key(&self, custid: u64) -> String {
+        format!("CHECKING:{}", custid)
     }
 
     fn load_phase_next(&mut self) -> WorkloadUnit {
-        let custid = self.get_next_custid();
-        let name = self.get_next_name();
-        let balance = self.get_next_balance();
+        let custid = self.get_rand_custid();
+        let name = self.get_name_from_custid(custid);
+        let savings_balance = self.get_rand_balance();
+        let checking_balance = self.get_rand_balance();
+
+        self.load_phase_cnt += 1;
 
         WorkloadUnit {
             tx: ProtoTransaction {
-                on_receive: None,
+                on_receive: Some(ProtoTransactionPhase {
+                    ops: vec![
+                        ProtoTransactionOp {
+                            op_type: ProtoTransactionOpType::Write.into(),
+                            operands: vec![self.get_name_table_key(custid).into_bytes(), name.into_bytes()]
+                        },
+                        ProtoTransactionOp {
+                            op_type: ProtoTransactionOpType::Write.into(),
+                            operands: vec![self.get_savings_table_key(custid).into_bytes(), savings_balance.to_be_bytes().to_vec()]
+                        },
+                        ProtoTransactionOp {
+                            op_type: ProtoTransactionOpType::Write.into(),
+                            operands: vec![self.get_checking_table_key(custid).into_bytes(), checking_balance.to_be_bytes().to_vec()]
+                        },
+                    ]
+                }),
                 on_crash_commit: None,
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader,
+            executor: Executor::Any,  // For PSL, executor is always Any
             wrapper_mode: WrapperMode::ClientRequest,
             rate_control: RateControl::CloseLoop,
         }
     }
 
     fn run_phase_next(&mut self) -> WorkloadUnit {
-        self.load_phase_next()
+        let next_op = self.tx_weights[self.tx_dist.sample(&mut self.rng)].0.clone();
+
+        let ops = match next_op {
+            TxOpType::Amalgamate => self.amalgamate_next(),
+            TxOpType::WriteCheck => self.write_check_next(),
+            TxOpType::DepositChecking => self.deposit_checking_next(),
+            TxOpType::TransactSavings => self.transact_savings_next(),
+            TxOpType::SendPayment => self.send_payment_next(),
+            TxOpType::Balance => self.balance_next(),
+        };
+
+        WorkloadUnit {
+            tx: ProtoTransaction {
+                on_receive: Some(ProtoTransactionPhase {
+                    ops,
+                }),
+                on_crash_commit: None,
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+                is_2pc: false,
+            },
+            executor: Executor::Any,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
+        }
+    }
+
+    fn amalgamate_next(&mut self) -> Vec<ProtoTransactionOp> {
+        let custid1 = self.get_rand_custid();
+        let custid2 = self.get_rand_custid();
+        vec![
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(custid1).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(custid2).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::StoredProcedure2.into(),
+                operands: vec![custid1.to_be_bytes().to_vec(), custid2.to_be_bytes().to_vec()],
+            },
+        ]
+    }
+
+    fn write_check_next(&mut self) -> Vec<ProtoTransactionOp> {
+        let custid = self.get_rand_custid();
+        let amount = 5.0f64; // From H-store.
+        vec![
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::StoredProcedure1.into(),
+                operands: vec![custid.to_be_bytes().to_vec(), amount.to_be_bytes().to_vec()],
+            },
+        ]
+    }
+
+    fn deposit_checking_next(&mut self) -> Vec<ProtoTransactionOp> {
+        let custid = self.get_rand_custid();
+        let amount = 1.3f64; // From H-store.
+        vec![
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Increment.into(),
+                operands: vec![self.get_checking_table_key(custid).into_bytes(), amount.to_be_bytes().to_vec()],
+            },
+        ]
+    }
+
+    fn transact_savings_next(&mut self) -> Vec<ProtoTransactionOp> {
+        let custid = self.get_rand_custid();
+        let amount = 20.20f64; // From H-store.
+        let transact_op = if amount > 0.0 {
+            ProtoTransactionOpType::Increment
+        } else {
+            ProtoTransactionOpType::CheckedDecrement
+        };
+        let amount = amount.abs();
+        vec![
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: transact_op.into(),
+                operands: vec![self.get_savings_table_key(custid).into_bytes(), amount.to_be_bytes().to_vec()],
+            },
+        ]
+    }
+
+    fn send_payment_next(&mut self) -> Vec<ProtoTransactionOp> {
+        let sender_custid = self.get_rand_custid();
+        let receiver_custid = self.get_rand_custid();
+        let amount = 5.00f64; // From H-store.
+        vec![
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(sender_custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(receiver_custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::CheckedDecrement.into(),
+                operands: vec![self.get_checking_table_key(sender_custid).into_bytes(), amount.to_be_bytes().to_vec()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Increment.into(),
+                operands: vec![self.get_checking_table_key(receiver_custid).into_bytes(), amount.to_be_bytes().to_vec()],
+            },
+        ]
+    }
+
+    fn balance_next(&mut self) -> Vec<ProtoTransactionOp> {
+        let custid = self.get_rand_custid();
+        vec![
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_name_table_key(custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_savings_table_key(custid).into_bytes()],
+            },
+            ProtoTransactionOp {
+                op_type: ProtoTransactionOpType::Read.into(),
+                operands: vec![self.get_checking_table_key(custid).into_bytes()],
+            },
+        ]
     }
 }
 
