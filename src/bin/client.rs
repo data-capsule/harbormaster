@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use psl::{client::{logger::ClientStatLogger, worker::ClientWorker, workload_generators::{BlankAEWorkloadGenerator, BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::Client, utils::channel::make_channel};
+use psl::{client::{logger::ClientStatLogger, worker::ClientWorker, workload_generators::{BlankAEWorkloadGenerator, BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, SmallbankGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::Client, utils::channel::make_channel};
 use tokio::task::JoinSet;
 
 #[global_allocator]
@@ -75,6 +75,11 @@ async fn main() -> std::io::Result<()> {
             },
             RequestConfig::MockSQL() => {
                 let generator = MockSQLGenerator::new();
+                let worker = ClientWorker::new(config, client, generator, id, _stat_tx);
+                ClientWorker::launch(worker, &mut client_handles).await;
+            },
+            RequestConfig::Smallbank(ref smallbank) => {
+                let generator = SmallbankGenerator::new(smallbank, id, config.workload_config.num_clients);
                 let worker = ClientWorker::new(config, client, generator, id, _stat_tx);
                 ClientWorker::launch(worker, &mut client_handles).await;
             },

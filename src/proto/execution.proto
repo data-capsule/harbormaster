@@ -24,14 +24,16 @@ enum ProtoTransactionOpType {
 
     // For SQL and other operations
     CUSTOM = 9;
+    STORED_PROCEDURE1 = 10;
+    STORED_PROCEDURE2 = 11;
 
     // To check for byz commit
-    PROBE = 10;
+    PROBE = 12;
 
     // To Block on VectorClock
-    BLOCK_ON_VC = 11;
-    BLOCK_INDEFINITELY = 12;
-    UNBLOCK = 13;
+    BLOCK_ON_VC = 13;
+    BLOCK_INDEFINITELY = 14;
+    UNBLOCK = 15;
 
 }
 

@@ -51,3 +51,6 @@ pub use kv_ycsb::*;
 
 mod mocksql;
 pub use mocksql::*;
+
+mod smallbank;
+pub use smallbank::*;
