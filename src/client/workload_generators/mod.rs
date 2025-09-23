@@ -51,3 +51,6 @@ pub use kv_ycsb::*;
 
 mod mocksql;
 pub use mocksql::*;
+
+mod ml_training;
+pub use ml_training::*;

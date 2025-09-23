@@ -49,4 +49,5 @@ pub enum RequestConfig {
     KVReadWriteUniform(KVReadWriteUniform),
     KVReadWriteYCSB(KVReadWriteYCSB),
     MockSQL(),
+    MLTraining(String),
 }
