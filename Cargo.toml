@@ -100,6 +100,8 @@ app_logger = []
 app_kvs = []
 app_sql = []
 app_ml = []
+app_banking = []
+
 # Protocols specs
 lucky_raft = ["fixed_leader", "never_sign", "no_qc"]
 signed_raft = ["fixed_leader", "dynamic_sign", "no_qc"]
@@ -112,7 +114,7 @@ pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 # Worker features.
 external_cache = []
 
-default = ["pirateship", "app_logger", "storage", "fast_path", "platforms", "gossip", "evil"]
+default = ["pirateship", "app_banking", "storage", "fast_path", "platforms", "gossip", "evil"]
 # default = ["signed_raft", "app_kvs", "storage", "fast_path", "platforms", "gossip", "external_cache"]
 # default = ["jolteon", "app_logger", "storage"]
 # default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
