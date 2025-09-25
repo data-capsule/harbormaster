@@ -58,7 +58,7 @@ impl CacheConnector {
         key: Vec<u8>,
     ) -> anyhow::Result<(Vec<u8>, u64), CacheError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let command = CacheCommand::Get(key.clone(), tx);
+        let command = CacheCommand::Get(key.clone(), true, tx);
 
         self.cache_tx.send(command).await.unwrap();
         let result = rx.await.unwrap();
@@ -70,6 +70,30 @@ impl CacheConnector {
         result.map(|v| {
             if let CachedValue::DWW(v) = v {
                 (v.value.clone(), v.seq_num)
+            } else {
+                unreachable!()
+            }
+        })
+    }
+
+    pub async fn dispatch_counter_read_request(
+        &self,
+        key: Vec<u8>,
+        should_block_snapshot: bool,
+    ) -> anyhow::Result<f64, CacheError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let command = CacheCommand::Get(key.clone(), should_block_snapshot, tx);
+
+        self.cache_tx.send(command).await.unwrap();
+        let result = rx.await.unwrap();
+
+        if let std::result::Result::Ok(CachedValue::DWW(_)) = &result {
+            return Err(CacheError::TypeMismatch);
+        }
+
+        result.map(|v| {
+            if let CachedValue::PNCounter(v) = v {
+                v.get_value()
             } else {
                 unreachable!()
             }
@@ -92,6 +116,30 @@ impl CacheConnector {
 
         let result = response_rx.await.unwrap()?;
         std::result::Result::Ok((result, None))
+    }
+
+    pub async fn dispatch_increment_request(
+        &self,
+        key: Vec<u8>,
+        value: f64,
+    ) -> anyhow::Result<f64, CacheError> {
+        let (tx, rx) = oneshot::channel();
+        let command = CacheCommand::Increment(key, value, BlockSeqNumQuery::DontBother, tx);
+        self.cache_tx.send(command).await.unwrap();
+        let result = rx.await.unwrap()?;
+        std::result::Result::Ok(result as f64)
+    }
+
+    pub async fn dispatch_decrement_request(
+        &self,
+        key: Vec<u8>,
+        value: f64,
+    ) -> anyhow::Result<f64, CacheError> {
+        let (tx, rx) = oneshot::channel();
+        let command = CacheCommand::Decrement(key, value, BlockSeqNumQuery::DontBother, tx);
+        self.cache_tx.send(command).await.unwrap();
+        let result = rx.await.unwrap()?;
+        std::result::Result::Ok(result as f64)
     }
 
     pub async fn dispatch_commit_request(&self, _force_prepare: bool) -> VectorClock {

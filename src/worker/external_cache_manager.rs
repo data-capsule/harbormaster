@@ -135,7 +135,7 @@ impl ExternalCacheManager {
 
     async fn handle_command(&mut self, command: CacheCommand) {
         match command {
-            CacheCommand::Get(key, response_tx) => {
+            CacheCommand::Get(key, _should_block_snapshot, response_tx) => {
                 self.get_from_external_kvs(key, response_tx).await;
             }
             CacheCommand::Put(key, value, seq_num_query, response_tx) => {

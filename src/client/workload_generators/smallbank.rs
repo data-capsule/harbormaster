@@ -185,11 +185,11 @@ impl SmallbankGenerator {
                             operands: vec![self.get_name_table_key(custid).into_bytes(), name.into_bytes()]
                         },
                         ProtoTransactionOp {
-                            op_type: ProtoTransactionOpType::Write.into(),
+                            op_type: ProtoTransactionOpType::Increment.into(),
                             operands: vec![self.get_savings_table_key(custid).into_bytes(), savings_balance.to_be_bytes().to_vec()]
                         },
                         ProtoTransactionOp {
-                            op_type: ProtoTransactionOpType::Write.into(),
+                            op_type: ProtoTransactionOpType::Increment.into(),
                             operands: vec![self.get_checking_table_key(custid).into_bytes(), checking_balance.to_be_bytes().to_vec()]
                         },
                     ]

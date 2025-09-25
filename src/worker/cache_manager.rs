@@ -27,7 +27,7 @@ pub enum CacheError {
 
 #[derive(Debug)]
 pub enum CacheCommand {
-    Get(CacheKey /* Key */, oneshot::Sender<Result<CachedValue, CacheError>>),
+    Get(CacheKey /* Key */, bool /* block snapshot */, oneshot::Sender<Result<CachedValue, CacheError>>,),
     Put(
         CacheKey /* Key */,
         CachedValue /* Value */,
@@ -96,7 +96,15 @@ impl CacheConnector {
         &self,
         key: Vec<u8>,
     ) -> anyhow::Result<CachedValue> {
-        let res = dispatch!(self, CacheCommand::Get, key);
+        let res = dispatch!(self, CacheCommand::Get, key, true);
+        Ok(res)
+    }
+
+    pub async fn get_nonblocking(
+        &self,
+        key: Vec<u8>,
+    ) -> anyhow::Result<CachedValue> {
+        let res = dispatch!(self, CacheCommand::Get, key, false);
         Ok(res)
     }
 
@@ -627,7 +635,7 @@ impl CacheManager {
 
     async fn _handle_command_single(&mut self, command: CacheCommand) {
         match command {
-            CacheCommand::Get(key, response_tx) => {
+            CacheCommand::Get(key, should_block_snapshot, response_tx) => {
                 let res = self.cache.get(&key);
 
                 #[cfg(feature = "evil")]
@@ -648,7 +656,7 @@ impl CacheManager {
                 let origin = self.value_origin.get(&key).cloned().unwrap_or(SenderType::Auth("devil".to_string(), 0));
                 let _ = response_tx.send(res.cloned().ok_or(CacheError::KeyNotFound));
 
-                let snapshot_propagated_signal_tx = if self.block_on_read_snapshot.is_some() {
+                let snapshot_propagated_signal_tx = if self.block_on_read_snapshot.is_some() || !should_block_snapshot {
                     None
                 } else {
                     let (tx, rx) = oneshot::channel();
@@ -658,6 +666,8 @@ impl CacheManager {
                     Some(tx)
                 };
 
+
+                // if should_block_snapshot == true:
                 // On the first read op of the block, the snapshot is fixed.
                 // Henceforth, all reads are based on this snapshot.
                 // Until the block sequencer proposes the new block. After that, the snapshot can be updated.
