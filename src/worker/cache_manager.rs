@@ -24,17 +24,16 @@ pub enum CacheError {
 
 #[derive(Debug)]
 pub enum CacheCommand {
-    Get(CacheKey /* Key */, oneshot::Sender<Result<(Vec<u8>, u64) /* Value, seq_num */, CacheError>>),
+    Get(CacheKey /* Key */, oneshot::Sender<Result<CachedValue, CacheError>>),
     Put(
         CacheKey /* Key */,
-        Vec<u8> /* Value */,
-        BigInt /* Val Hash */,
+        CachedValue /* Value */,
         BlockSeqNumQuery,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
     Cas(
         CacheKey /* Key */,
-        Vec<u8> /* Value */,
+        CachedValue /* Value */,
         u64 /* Expected SeqNum */,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
@@ -81,7 +80,7 @@ impl CacheConnector {
     pub async fn get(
         &self,
         key: Vec<u8>,
-    ) -> anyhow::Result<(Vec<u8>, u64)> {
+    ) -> anyhow::Result<CachedValue> {
         let res = dispatch!(self, CacheCommand::Get, key);
         Ok(res)
     }
@@ -89,11 +88,10 @@ impl CacheConnector {
     pub async fn put(
         &self,
         key: Vec<u8>,
-        value: Vec<u8>,
-        val_hash: BigInt,
+        value: CachedValue,
         seq_num_query: BlockSeqNumQuery,
     ) -> anyhow::Result<()> {
-        dispatch!(self, CacheCommand::Put, key, value, val_hash, seq_num_query);
+        dispatch!(self, CacheCommand::Put, key, value, seq_num_query);
         Ok(())
     }
 
@@ -488,7 +486,7 @@ impl CacheManager {
                     trace!("Key not found: {:?}", key);
                 }
                 let origin = self.value_origin.get(&key).cloned().unwrap_or(SenderType::Auth("devil".to_string(), 0));
-                let _ = response_tx.send(res.map(|v| (v.value.clone(), v.seq_num)).ok_or(CacheError::KeyNotFound));
+                let _ = response_tx.send(res.cloned().ok_or(CacheError::KeyNotFound));
 
                 let snapshot_propagated_signal_tx = if self.block_on_read_snapshot.is_some() {
                     None
@@ -517,25 +515,25 @@ impl CacheManager {
 
 
             }
-            CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
+            CacheCommand::Put(key, value, seq_num_query, response_tx) => {
                 self.value_origin.insert(key.clone(), SenderType::Auth(self.config.get().net_config.name.clone(), 0));
                 if self.cache.contains_key(&key) {
-                    let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.clone(), val_hash.clone());
+                    let seq_num = self.cache.get_mut(&key).unwrap().blind_update(value.value.clone(), value.val_hash.clone());
                     response_tx.send(Ok(seq_num)).unwrap();
                     let (current_vc_tx, current_vc_rx) = oneshot::channel();
-                    let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: CachedValue::new_with_seq_num(value, seq_num, val_hash.clone()), seq_num_query, current_vc: current_vc_tx }).await;
+                    let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: CachedValue::new_with_seq_num(value.value.clone(), seq_num, value.val_hash.clone()), seq_num_query, current_vc: current_vc_tx }).await;
                     let current_vc = current_vc_rx.await.unwrap();
-                    trace!("Write key: {}, value_hash: {}, current_vc: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), hex::encode(val_hash.to_bytes_be().1), current_vc);
+                    trace!("Write key: {}, value_hash: {}, current_vc: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), hex::encode(value.val_hash.to_bytes_be().1), current_vc);
                     return;
                 }
 
-                let cached_value = CachedValue::new(value.clone(), val_hash.clone());
+                let cached_value = CachedValue::new(value.value.clone(), value.val_hash.clone());
                 self.cache.insert(key.clone(), cached_value);
                 response_tx.send(Ok(1)).unwrap();
                 let (current_vc_tx, current_vc_rx) = oneshot::channel();
-                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: CachedValue::new(value, val_hash.clone()), seq_num_query, current_vc: current_vc_tx }).await;
+                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: CachedValue::new(value.value.clone(), value.val_hash.clone()), seq_num_query, current_vc: current_vc_tx }).await;
                 let current_vc = current_vc_rx.await.unwrap();
-                trace!("Write key: {}, value_hash: {}, current_vc: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), hex::encode(val_hash.to_bytes_be().1), current_vc);
+                trace!("Write key: {}, value_hash: {}, current_vc: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), hex::encode(value.val_hash.to_bytes_be().1), current_vc);
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();

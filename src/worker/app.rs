@@ -10,7 +10,7 @@ use num_bigint::{BigInt, Sign};
 use prost::Message as _;
 use tokio::{sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex}, task::JoinSet, time::Instant};
 
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, AtomicKeyStore}, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::ProtoVectorClock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{BlockSeqNumQuery, VectorClock}, cache_manager::CacheKey}};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, consensus::batch_proposal::{MsgAckChanWithTag, TxWithAckChanTag}, crypto::{default_hash, hash, AtomicKeyStore}, proto::{client::{ProtoClientReply, ProtoClientRequest, ProtoTransactionReceipt}, consensus::ProtoVectorClock, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, server::LatencyProfile, PinnedMessage, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{BlockSeqNumQuery, VectorClock}, cache_manager::{CacheKey, CachedValue}}};
 
 use super::cache_manager::{CacheCommand, CacheError};
 
@@ -63,7 +63,7 @@ impl CacheConnector {
         self.cache_tx.send(command).await.unwrap();
         let result = rx.await.unwrap();
 
-        result
+        result.map(|v| (v.value, v.seq_num))
     }
 
     pub async fn dispatch_write_request(
@@ -74,7 +74,8 @@ impl CacheConnector {
         // let (tx, rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let val_hash = BigInt::from_bytes_be(Sign::Plus, &hash(&value));
-        let command = CacheCommand::Put(key.clone(), value, val_hash, BlockSeqNumQuery::DontBother, response_tx);
+        let value = CachedValue::new(value, val_hash);
+        let command = CacheCommand::Put(key.clone(), value, BlockSeqNumQuery::DontBother, response_tx);
 
 
         self.cache_tx.send(command).await.unwrap();

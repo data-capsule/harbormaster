@@ -136,8 +136,8 @@ impl ExternalCacheManager {
             CacheCommand::Get(key, response_tx) => {
                 self.get_from_external_kvs(key, response_tx).await;
             }
-            CacheCommand::Put(key, value, val_hash, seq_num_query, response_tx) => {
-                self.put_to_external_kvs(key, value, val_hash, seq_num_query, response_tx).await;
+            CacheCommand::Put(key, value, seq_num_query, response_tx) => {
+                self.put_to_external_kvs(key, value, seq_num_query, response_tx).await;
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();
@@ -165,7 +165,7 @@ impl ExternalCacheManager {
         // Kept for API compatibility with CacheManager.
     }
 
-    async fn get_from_external_kvs(&mut self, key: CacheKey, response_tx: oneshot::Sender<Result<(Vec<u8>, u64), CacheError>>) {
+    async fn get_from_external_kvs(&mut self, key: CacheKey, response_tx: oneshot::Sender<Result<CachedValue, CacheError>>) {
         let tx = ProtoTransaction {
             on_receive: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
@@ -237,7 +237,7 @@ impl ExternalCacheManager {
 
                 let result = &result.result[0];
                 if result.success {
-                    response_tx.send(Ok((result.values[0].clone(), 0 /* this is unused here */)));
+                    response_tx.send(Ok(CachedValue::new(result.values[0].clone(), BigInt::from(0) /* this is unused here */)));
                 } else {
                     response_tx.send(Err(CacheError::KeyNotFound));
                 }
@@ -254,12 +254,12 @@ impl ExternalCacheManager {
 
     }
 
-    async fn put_to_external_kvs(&mut self, key: CacheKey, value: Vec<u8>, val_hash: BigInt, seq_num_query: BlockSeqNumQuery, response_tx: oneshot::Sender<Result<u64, CacheError>>) {
+    async fn put_to_external_kvs(&mut self, key: CacheKey, value: CachedValue, seq_num_query: BlockSeqNumQuery, response_tx: oneshot::Sender<Result<u64, CacheError>>) {
         let tx = ProtoTransaction {
             on_receive: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
                     op_type: ProtoTransactionOpType::Write as i32,
-                    operands: vec![key, value],
+                    operands: vec![key, value.value.clone()],
                 }],
             }),
             on_crash_commit: None,
