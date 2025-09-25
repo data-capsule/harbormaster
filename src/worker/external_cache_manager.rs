@@ -140,6 +140,12 @@ impl ExternalCacheManager {
             }
             CacheCommand::Put(key, value, seq_num_query, response_tx) => {
                 self.put_to_external_kvs(key, value, seq_num_query, response_tx).await;
+            },
+            CacheCommand::Increment(key, value, seq_num_query, response_tx) => {
+                unimplemented!();
+            }
+            CacheCommand::Decrement(key, value, seq_num_query, response_tx) => {
+                unimplemented!();
             }
             CacheCommand::Cas(key, value, expected_seq_num, response_tx) => {
                 unimplemented!();
