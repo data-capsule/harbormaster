@@ -463,7 +463,7 @@ impl LockServer {
             .collect();
 
         if unlock_count > 1 {
-            error!("Unlock count: {}", unlock_count);
+            trace!("Unlock count: {}", unlock_count);
         }
         (only_release_commands, res)
     }

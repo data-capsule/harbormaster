@@ -76,11 +76,7 @@ fn get_feature_set() -> (&'static str, &'static str) {
 enum NodeType {
     Sequencer(sequencer::SequencerNode),
 
-    #[cfg(feature = "app_banking")]
     Worker(worker::PSLWorker<worker::engines::AbortableKVSTask>),
-
-    #[cfg(not(feature = "app_banking"))]
-    Worker(worker::PSLWorker<worker::engines::KVSTask>),
 
     Storage(storage_server::StorageNode),
 
@@ -93,11 +89,7 @@ async fn run_sequencer(cfg: Config) -> NodeType {
 
 
 async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
-    #[cfg(feature = "app_banking")]
     let node = worker::PSLWorker::<worker::engines::AbortableKVSTask>::new(cfg);
-
-    #[cfg(not(feature = "app_banking"))]
-    let node = worker::PSLWorker::<worker::engines::KVSTask>::new(cfg);
 
     NodeType::Worker(node)
 }

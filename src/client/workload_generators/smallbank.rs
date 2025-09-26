@@ -59,7 +59,8 @@ In case where an intermediate value needs to read and conditioned on, we have to
     INCREMENT: CHECKING:receiver_custid => amount]
 
 --- The following can't be represented as READ/INCREMENT/DECREMENT operations as they require conditionals on intermediate values ---
-- WriteCheck(custid, amount)  // If sum of checking and savings is less than amount, decrease checking by amount + 1, else decrease checking by amount
+- WriteCheck(custid, amount)  // Original logic: If sum of checking and savings is less than amount, decrease checking by amount + 1, else decrease checking by amount
+                              // Modified logic: Do not support overdraft, just write check for whatever is possible. If amount exceeds, zero out both accounts.
     [READ: NAME:custid, STORED_PROCEDURE1: (custid, amount)]
 
 - Amalgamate(custid1, custid2) // moves all money from custid1 and custid2 into custid2's checking
@@ -163,19 +164,19 @@ impl SmallbankGenerator {
         balance.clamp(self.config.min_balance, self.config.max_balance)
     }
 
-    fn get_name_from_custid(&self, custid: u64) -> String {
+    fn get_name_from_custid(custid: u64) -> String {
         format!("name{}", custid)
     }
 
-    fn get_name_table_key(&self, custid: u64) -> String {
+    pub fn get_name_table_key(custid: u64) -> String {
         format!("NAME:{}", custid)
     }
 
-    fn get_savings_table_key(&self, custid: u64) -> String {
+    pub fn get_savings_table_key(custid: u64) -> String {
         format!("SAVINGS:{}", custid)
     }
 
-    fn get_checking_table_key(&self, custid: u64) -> String {
+    pub fn get_checking_table_key(custid: u64) -> String {
         format!("CHECKING:{}", custid)
     }
 
@@ -189,7 +190,7 @@ impl SmallbankGenerator {
         }
         trace!("Worker {} Load phase count: {}", self.client_idx, self.load_phase_cnt);
         let custid = self.load_phase_cnt as u64;
-        let name = self.get_name_from_custid(custid);
+        let name = Self::get_name_from_custid(custid);
         let savings_balance = self.get_rand_balance();
         let checking_balance = self.get_rand_balance();
         trace!("CreateAccount({}, {}, {}, {})", custid, name, savings_balance, checking_balance);
@@ -201,15 +202,15 @@ impl SmallbankGenerator {
                     ops: vec![
                         ProtoTransactionOp {
                             op_type: ProtoTransactionOpType::Write.into(),
-                            operands: vec![self.get_name_table_key(custid).into_bytes(), name.into_bytes()]
+                            operands: vec![Self::get_name_table_key(custid).into_bytes(), name.into_bytes()]
                         },
                         ProtoTransactionOp {
                             op_type: ProtoTransactionOpType::Increment.into(),
-                            operands: vec![self.get_savings_table_key(custid).into_bytes(), savings_balance.to_be_bytes().to_vec()]
+                            operands: vec![Self::get_savings_table_key(custid).into_bytes(), savings_balance.to_be_bytes().to_vec()]
                         },
                         ProtoTransactionOp {
                             op_type: ProtoTransactionOpType::Increment.into(),
-                            operands: vec![self.get_checking_table_key(custid).into_bytes(), checking_balance.to_be_bytes().to_vec()]
+                            operands: vec![Self::get_checking_table_key(custid).into_bytes(), checking_balance.to_be_bytes().to_vec()]
                         },
                     ]
                 }),
@@ -260,11 +261,11 @@ impl SmallbankGenerator {
         vec![
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(custid1).into_bytes()],
+                operands: vec![Self::get_name_table_key(custid1).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(custid2).into_bytes()],
+                operands: vec![Self::get_name_table_key(custid2).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::StoredProcedure2.into(),
@@ -280,7 +281,7 @@ impl SmallbankGenerator {
         vec![
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(custid).into_bytes()],
+                operands: vec![Self::get_name_table_key(custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::StoredProcedure1.into(),
@@ -296,11 +297,11 @@ impl SmallbankGenerator {
         vec![
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(custid).into_bytes()],
+                operands: vec![Self::get_name_table_key(custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Increment.into(),
-                operands: vec![self.get_checking_table_key(custid).into_bytes(), amount.to_be_bytes().to_vec()],
+                operands: vec![Self::get_checking_table_key(custid).into_bytes(), amount.to_be_bytes().to_vec()],
             },
         ]
     }
@@ -318,11 +319,11 @@ impl SmallbankGenerator {
         vec![
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(custid).into_bytes()],
+                operands: vec![Self::get_name_table_key(custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: transact_op.into(),
-                operands: vec![self.get_savings_table_key(custid).into_bytes(), amount.to_be_bytes().to_vec()],
+                operands: vec![Self::get_savings_table_key(custid).into_bytes(), amount.to_be_bytes().to_vec()],
             },
         ]
     }
@@ -335,19 +336,19 @@ impl SmallbankGenerator {
         vec![
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(sender_custid).into_bytes()],
+                operands: vec![Self::get_name_table_key(sender_custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(receiver_custid).into_bytes()],
+                operands: vec![Self::get_name_table_key(receiver_custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::CheckedDecrement.into(),
-                operands: vec![self.get_checking_table_key(sender_custid).into_bytes(), amount.to_be_bytes().to_vec()],
+                operands: vec![Self::get_checking_table_key(sender_custid).into_bytes(), amount.to_be_bytes().to_vec()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Increment.into(),
-                operands: vec![self.get_checking_table_key(receiver_custid).into_bytes(), amount.to_be_bytes().to_vec()],
+                operands: vec![Self::get_checking_table_key(receiver_custid).into_bytes(), amount.to_be_bytes().to_vec()],
             },
         ]
     }
@@ -358,15 +359,15 @@ impl SmallbankGenerator {
         vec![
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_name_table_key(custid).into_bytes()],
+                operands: vec![Self::get_name_table_key(custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_savings_table_key(custid).into_bytes()],
+                operands: vec![Self::get_savings_table_key(custid).into_bytes()],
             },
             ProtoTransactionOp {
                 op_type: ProtoTransactionOpType::Read.into(),
-                operands: vec![self.get_checking_table_key(custid).into_bytes()],
+                operands: vec![Self::get_checking_table_key(custid).into_bytes()],
             },
         ]
     }

@@ -131,6 +131,18 @@ impl CacheConnector {
         std::result::Result::Ok((result as f64, Some(rx)))
     }
 
+    pub async fn dispatch_blind_increment_request(
+        &self,
+        key: Vec<u8>,
+        value: f64,
+    ) -> anyhow::Result<f64, CacheError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let command = CacheCommand::Increment(key, value, BlockSeqNumQuery::DontBother, response_tx);
+        self.cache_tx.send(command).await.unwrap();
+        let result = response_rx.await.unwrap()?;
+        std::result::Result::Ok(result as f64)
+    }
+
     pub async fn dispatch_decrement_request(
         &self,
         key: Vec<u8>,

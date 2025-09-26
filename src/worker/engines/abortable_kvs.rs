@@ -3,6 +3,7 @@ use std::{collections::HashSet, time::Instant};
 use futures::{stream::FuturesUnordered, StreamExt as _};
 use itertools::Itertools;
 use log::{error, info, trace, warn};
+use tokio::sync::oneshot;
 
 use crate::{consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::Sender, worker::{app::{CacheConnector, ClientHandlerTask, UncommittedResultSet}, block_sequencer::VectorClock, cache_manager::{CacheCommand, CacheKey}, TxWithAckChanTag}};
 
@@ -187,6 +188,17 @@ impl AbortableKVSTask {
                     atleast_one_write = true;
                     last_write_index = i;
                 },
+
+                #[cfg(feature = "app_banking")]
+                ProtoTransactionOpType::StoredProcedure1 => {
+                    atleast_one_write = true;
+                    last_write_index = i;
+                },
+                #[cfg(feature = "app_banking")]
+                ProtoTransactionOpType::StoredProcedure2 => {
+                    atleast_one_write = true;
+                    last_write_index = i;
+                },
                 _ => {}
             }
         }
@@ -276,74 +288,40 @@ impl AbortableKVSTask {
                         });
                         continue;
                     }
-                    let approx_curr_val = self.cache_connector.dispatch_counter_read_request(key.clone(), false).await;
-                    let approx_curr_val = match approx_curr_val {
-                        std::result::Result::Ok(v) => v,
-                        std::result::Result::Err(crate::worker::cache_manager::CacheError::KeyNotFound) => {
-                            0.0
-                        },
-                        _ => {
-                            warn!("Error reading counter: {:?}", approx_curr_val);
-                            results.push(ProtoTransactionOpResult {
-                                success: false,
-                                values: vec![],
-                            });
-                            continue;
-                        }
-                    };
 
-                    if approx_curr_val < value {
-                        // Abort everything after this.
-                        warn!("Counter: {} Approximate unlocked value: {} is less than decrement value: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), approx_curr_val, value);
-                        is_aborted = true;
-                        results.push(ProtoTransactionOpResult {
-                            success: false,
-                            values: vec![],
-                        });
-                        continue;
-                    }
-
-                    let _ = self.cache_connector.dispatch_lock_request(&vec![(key.clone(), false)]).await;
-                    locked_keys.push(key.clone());
-
-                    let curr_val = self.cache_connector.dispatch_counter_read_request(key.clone(), true).await;
-                    let curr_val = match curr_val {
-                        std::result::Result::Ok(v) => v,
-                        std::result::Result::Err(crate::worker::cache_manager::CacheError::KeyNotFound) => {
-                            0.0
-                        },
-                        _ => {
-                            unreachable!()
-                        }
-                    };
-
-                    if curr_val < value {
-                        warn!("Counter: {} Current locked value: {} is less than decrement value: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), curr_val, value);
-                        is_aborted = true;
-                        results.push(ProtoTransactionOpResult {
-                            success: false,
-                            values: vec![],
-                        });
-                        continue;
-                    }
-
-                    let res = self.cache_connector.dispatch_decrement_request(key.clone(), value).await;
-                    if let std::result::Result::Err(e) = res {
-                        return Err(e.into());
-                    }
-                    let (final_val, block_seq_num_rx) = res.unwrap();
-                    if let Some(block_seq_num_rx) = block_seq_num_rx {
-                        block_seq_num_rx_vec.push(block_seq_num_rx);
-                    }
-                    trace!("Counter: {} decremented to {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), final_val);
-
-                    results.push(ProtoTransactionOpResult {
-                        success: true,
-                        values: vec![final_val.to_be_bytes().to_vec()],
-                    });
+                    self.checked_decrement(key, value, &mut is_aborted, &mut results, &mut block_seq_num_rx_vec, &mut locked_keys).await;
+                    
 
                     // The caller takes care of unlocking.
                 },
+
+                #[cfg(feature = "app_banking")]
+                ProtoTransactionOpType::StoredProcedure1 => {
+                    // This is WriteCheck(custid, amount) in Smallbank.
+                    let custid = op.operands[0].clone();
+                    let amount = op.operands[1].clone();
+                    let custid = u64::from_be_bytes(custid.as_slice().try_into().unwrap());
+                    let amount = f64::from_be_bytes(amount.as_slice().try_into().unwrap());
+                    self.smallbank_write_check(custid, amount, &mut is_aborted, &mut results, &mut block_seq_num_rx_vec, &mut locked_keys).await;
+
+                }
+
+                #[cfg(feature = "app_banking")]
+                ProtoTransactionOpType::StoredProcedure2 => {
+                    // This is Amalgamate(custid1, custid2) in Smallbank.
+                    let custid1 = op.operands[0].clone();
+                    let custid2 = op.operands[1].clone();
+                    let custid1 = u64::from_be_bytes(custid1.as_slice().try_into().unwrap());
+                    let custid2 = u64::from_be_bytes(custid2.as_slice().try_into().unwrap());
+                    let success = self.smallbank_amalgamate(custid1, custid2, &mut is_aborted, &mut results, &mut block_seq_num_rx_vec, &mut locked_keys).await;
+
+                    if !success {
+                        is_aborted = true;
+                        trace!("Amalgamate failed: {} and {}", custid1, custid2);
+                    }
+
+                }
+
                 _ => {}
             }
             
@@ -377,6 +355,206 @@ impl AbortableKVSTask {
         
         reply_handler_tx.send((vec![], resp.clone(), None)).await;
         Ok(())
+    }
+
+
+    async fn checked_decrement(&mut self, key: CacheKey, value: f64, is_aborted: &mut bool, results: &mut Vec<ProtoTransactionOpResult>, block_seq_num_rx_vec: &mut FuturesUnordered<oneshot::Receiver<u64>>, locked_keys: &mut Vec<CacheKey>) -> bool /* success */{
+        let approx_curr_val = self.cache_connector.dispatch_counter_read_request(key.clone(), false).await;
+        let approx_curr_val = match approx_curr_val {
+            std::result::Result::Ok(v) => v,
+            std::result::Result::Err(crate::worker::cache_manager::CacheError::KeyNotFound) => {
+                0.0
+            },
+            _ => {
+                warn!("Error reading counter: {:?}", approx_curr_val);
+                results.push(ProtoTransactionOpResult {
+                    success: false,
+                    values: vec![],
+                });
+                return false;
+            }
+        };
+
+        if approx_curr_val < value {
+            // Abort everything after this.
+            trace!("Counter: {} Approximate unlocked value: {} is less than decrement value: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), approx_curr_val, value);
+            *is_aborted = true;
+            results.push(ProtoTransactionOpResult {
+                success: false,
+                values: vec![],
+            });
+            return false;
+        }
+
+        let _ = self.cache_connector.dispatch_lock_request(&vec![(key.clone(), false)]).await;
+        locked_keys.push(key.clone());
+
+        let curr_val = self.cache_connector.dispatch_counter_read_request(key.clone(), true).await;
+        let curr_val = match curr_val {
+            std::result::Result::Ok(v) => v,
+            std::result::Result::Err(crate::worker::cache_manager::CacheError::KeyNotFound) => {
+                0.0
+            },
+            _ => {
+                unreachable!()
+            }
+        };
+
+        if curr_val < value {
+            trace!("Counter: {} Current locked value: {} is less than decrement value: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), curr_val, value);
+            *is_aborted = true;
+            results.push(ProtoTransactionOpResult {
+                success: false,
+                values: vec![],
+            });
+            return false;
+        }
+
+        let res = self.cache_connector.dispatch_decrement_request(key.clone(), value).await;
+        if let std::result::Result::Err(_e) = res {
+            return false;
+        }
+        let (final_val, block_seq_num_rx) = res.unwrap();
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+        trace!("Counter: {} decremented to {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), final_val);
+
+        results.push(ProtoTransactionOpResult {
+            success: true,
+            values: vec![final_val.to_be_bytes().to_vec()],
+        });
+        true
+    
+    }
+
+    fn get_checking_table_key(custid: u64) -> String {
+        format!("CHECKING:{}", custid)
+    }
+
+    fn get_savings_table_key(custid: u64) -> String {
+        format!("SAVINGS:{}", custid)
+    }
+
+    async fn smallbank_write_check(&mut self, custid: u64, amount: f64, is_aborted: &mut bool, results: &mut Vec<ProtoTransactionOpResult>, block_seq_num_rx_vec: &mut FuturesUnordered<oneshot::Receiver<u64>>, locked_keys: &mut Vec<CacheKey>) {
+        let checking_key = Self::get_checking_table_key(custid);
+        let savings_key = Self::get_savings_table_key(custid);
+
+        let checking_val = self.cache_connector.dispatch_counter_read_request(checking_key.clone().into_bytes(), false).await;
+        let savings_val = self.cache_connector.dispatch_counter_read_request(savings_key.clone().into_bytes(), false).await;
+
+        let Ok(checking_val) = checking_val else {
+            *is_aborted = true;
+            return;
+        };
+        let Ok(savings_val) = savings_val else {
+            *is_aborted = true;
+            return;
+        };
+
+        let (checking_deduct, savings_deduct) = if checking_val + savings_val < amount {
+            (checking_val, savings_val) // zero out both
+        } else if checking_val < amount {
+            (checking_val, amount - checking_val) // zero out checking, take the rest from savings
+        } else {
+            (amount, 0.0) // take the full amount from checking, don't touch savings
+        };
+
+
+        if checking_deduct > 0.0 {
+            let ret = self.checked_decrement(checking_key.into_bytes(), checking_deduct, is_aborted, results, block_seq_num_rx_vec, locked_keys).await;
+            if !ret {
+                return;
+            }
+        }
+        if savings_deduct > 0.0 {
+            self.checked_decrement(savings_key.into_bytes(), savings_deduct, is_aborted, results, block_seq_num_rx_vec, locked_keys).await;
+        }
+
+        trace!("WriteCheck: {} deducted {} from checking and {} from savings", custid, checking_deduct, savings_deduct);
+    }
+
+    async fn smallbank_amalgamate(&mut self, custid1: u64, custid2: u64, is_aborted: &mut bool, results: &mut Vec<ProtoTransactionOpResult>, block_seq_num_rx_vec: &mut FuturesUnordered<oneshot::Receiver<u64>>, locked_keys: &mut Vec<CacheKey>) -> bool /* success */ {
+        let src_checking_key = Self::get_checking_table_key(custid1);
+        let src_savings_key = Self::get_savings_table_key(custid1);
+        let dst_checking_key = Self::get_checking_table_key(custid2);
+        let dst_savings_key = Self::get_savings_table_key(custid2);
+
+        // Zero out src_* and dst_savings.
+        let src_checking_val = self.cache_connector.dispatch_counter_read_request(src_checking_key.clone().into_bytes(), false).await;
+        let src_savings_val = self.cache_connector.dispatch_counter_read_request(src_savings_key.clone().into_bytes(), false).await;
+        let dst_savings_val = self.cache_connector.dispatch_counter_read_request(dst_savings_key.clone().into_bytes(), false).await;
+
+        let Ok(src_checking_val) = src_checking_val else {
+            *is_aborted = true;
+            return false;
+        };
+        let Ok(src_savings_val) = src_savings_val else {
+            *is_aborted = true;
+            return false;
+        };
+        let Ok(dst_savings_val) = dst_savings_val else {
+            *is_aborted = true;
+            return false;
+        };
+
+
+        if src_checking_val > 0.0 {
+            let ret = self.checked_decrement(src_checking_key.clone().into_bytes(), src_checking_val, is_aborted, results, block_seq_num_rx_vec, locked_keys).await;
+            if !ret {
+                return false;
+            }
+        }
+        if src_savings_val > 0.0 {
+            let ret = self.checked_decrement(src_savings_key.clone().into_bytes(), src_savings_val, is_aborted, results, block_seq_num_rx_vec, locked_keys).await;
+            if !ret {
+
+                // Rollback src_checking_val.
+                if src_checking_val > 0.0 {
+                    let _ = self.cache_connector.dispatch_blind_increment_request(src_checking_key.clone().into_bytes(), src_checking_val).await;
+                }
+                return false;
+            }
+        }
+        if dst_savings_val > 0.0 {
+            let ret = self.checked_decrement(dst_savings_key.clone().into_bytes(), dst_savings_val, is_aborted, results, block_seq_num_rx_vec, locked_keys).await;
+            if !ret {
+                // Rollback src_checking_val.
+                if src_checking_val > 0.0 {
+                    let _ = self.cache_connector.dispatch_blind_increment_request(src_checking_key.clone().into_bytes(), src_checking_val).await;
+                }
+                // Rollback src_savings_val.
+                if src_savings_val > 0.0 {
+                    let _ = self.cache_connector.dispatch_blind_increment_request(src_savings_key.clone().into_bytes(), src_savings_val).await;
+                }
+                return false;
+            }
+        }
+
+        let total_deducted_val = src_checking_val + src_savings_val + dst_savings_val;
+
+        if total_deducted_val > 0.0 {
+            let res = self.cache_connector.dispatch_increment_request(dst_checking_key.clone().into_bytes(), total_deducted_val).await;
+            if let std::result::Result::Err(e) = res {
+                // This generally never fails.
+                return false;
+            }
+            let (approx_curr_val, block_seq_num_rx) = res.unwrap();
+            if let Some(block_seq_num_rx) = block_seq_num_rx {
+                block_seq_num_rx_vec.push(block_seq_num_rx);
+            }
+    
+            results.push(ProtoTransactionOpResult {
+                success: true,
+                values: vec![approx_curr_val.to_be_bytes().to_vec()],
+            });
+        }
+
+
+        trace!("Amalgamate: Transferred {} from {} to {}", total_deducted_val, custid1, custid2);
+        true
+
+
     }
 
 
