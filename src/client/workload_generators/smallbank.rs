@@ -78,7 +78,7 @@ use rand::prelude::*;
 use rand_chacha::ChaCha20Rng;
 use rand_distr::Normal;
 
-use crate::{client::workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode}, config::Smallbank, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
+use crate::{client::workload_generators::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode}, config::Smallbank, crypto::hash, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
 #[derive(Clone)]
 enum TxOpType {
@@ -97,7 +97,6 @@ pub struct SmallbankGenerator {
 
     client_idx: usize,
     total_clients: usize,
-    load_phase_count: usize,
 
     tx_weights: [(TxOpType, u64); 6],
     tx_dist: WeightedIndex<u64>,
@@ -108,7 +107,19 @@ pub struct SmallbankGenerator {
 
 impl SmallbankGenerator {
     pub fn new(config: &Smallbank, client_idx: usize, total_clients: usize) -> Self {
-        let rng = ChaCha20Rng::from_os_rng();
+        let mut seed = vec![0u8; 32];
+        // Works for both 32 and 64 bit systems.
+        let sz = std::mem::size_of::<usize>();
+        let iters = 32 / sz;
+        for i in 0..iters-1 {
+            seed[i * sz..(i + 1) * sz].copy_from_slice(&client_idx.to_le_bytes());
+        }
+        let _rnd: u64 = rand::rng().random();
+        let _rnd = _rnd as usize;
+        seed[(iters - 1) * sz..].copy_from_slice(&_rnd.to_le_bytes());
+        let seed = seed.try_into().unwrap();
+
+        let rng = ChaCha20Rng::from_seed(seed);
         let tx_weights = [
             (TxOpType::Amalgamate, config.frequency_amalgamate),
             (TxOpType::WriteCheck, config.frequency_write_check),
@@ -133,7 +144,6 @@ impl SmallbankGenerator {
             rng,
             client_idx,
             total_clients,
-            load_phase_count: 0,
             tx_weights,
             tx_dist,
             custid_gen_dist,
@@ -170,13 +180,20 @@ impl SmallbankGenerator {
     }
 
     fn load_phase_next(&mut self) -> WorkloadUnit {
-        let custid = self.get_rand_custid();
+        loop {
+            self.load_phase_cnt += 1;
+
+            if self.load_phase_cnt % self.total_clients == self.client_idx {
+                break;
+            }
+        }
+        trace!("Worker {} Load phase count: {}", self.client_idx, self.load_phase_cnt);
+        let custid = self.load_phase_cnt as u64;
         let name = self.get_name_from_custid(custid);
         let savings_balance = self.get_rand_balance();
         let checking_balance = self.get_rand_balance();
         trace!("CreateAccount({}, {}, {}, {})", custid, name, savings_balance, checking_balance);
 
-        self.load_phase_cnt += 1;
 
         WorkloadUnit {
             tx: ProtoTransaction {
