@@ -160,7 +160,7 @@ impl CacheConnector {
         let (tx, rx) = oneshot::channel();
         let command = CacheCommand::Commit(tx, false /* force_prepare */);
         
-        self.cache_tx.send(command).await;
+        self.cache_tx.send(command).await.unwrap();
         let vc = rx.await.unwrap();
         vc
     }

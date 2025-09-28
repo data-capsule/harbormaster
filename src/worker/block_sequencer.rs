@@ -3,6 +3,7 @@ use std::{collections::HashSet, fmt::{self, Debug, Display}, ops::{Deref, DerefM
 use hashbrown::HashMap;
 use itertools::Itertools;
 use log::{error, info, trace, warn};
+use num_bigint::BigInt;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 
@@ -393,14 +394,16 @@ impl BlockSequencer {
                 if _actually_advanced {
                     self.__vc_dirty = true;
                 }
-                self.send_heartbeat().await;
+                // self.send_heartbeat().await;
                 self.flush_vc_wait_buffer().await;
 
                 self.is_quiscent = is_quiscent;
             },
             SequencerCommand::MakeNewBlock(sender_did_prepare, sender_vc, force_prepare) => {
-                self.send_heartbeat().await;
                 let actually_did_prepare = self.maybe_prepare_new_block(force_prepare).await;
+                if actually_did_prepare {
+                    self.send_heartbeat().await;
+                }
                 sender_did_prepare.send(actually_did_prepare).unwrap();
 
                 if let Some(sender_vc) = sender_vc {
@@ -564,6 +567,8 @@ impl BlockSequencer {
         let read_vc = self.curr_vector_clock.clone();
         self.curr_vector_clock.advance(me.clone(), seq_num);
         assert!(read_vc.get(&me) + 1 == seq_num);
+
+        // self.all_write_op_bag.push((b"bleh".to_vec(), CachedValue::new_dww(b"bleh".to_vec(), BigInt::from(1))));
 
         let self_reads = self.self_read_op_bag.drain(..).collect::<Vec<_>>();
 

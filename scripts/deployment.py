@@ -545,10 +545,13 @@ class AWSDeployment(Deployment):
 
         machine_list = json.loads(machine_list)
 
-        # The format is: [[name, private_ip, public_ip]]
+        print("Machine list:")
+        pprint(machine_list)
+
+        # The format is: [[name, private_ip, public_ip, job]]
 
         node_list = {}
-        for name, private_ip, public_ip in machine_list:
+        for name, private_ip, public_ip, job in machine_list:
             
             if "tdx" in name:
                 tee_type = "tdx"
@@ -567,7 +570,8 @@ class AWSDeployment(Deployment):
                 "private_ip": private_ip,
                 "public_ip": public_ip,
                 "tee_type": tee_type,
-                "region_id": region_id
+                "region_id": region_id,
+                "tag": job
             }
 
         self.raw_config["node_list"] = node_list

@@ -163,7 +163,8 @@ sleep 60
                 ret[curr].append(worker_names[parent])
             i += 1
 
-        return ret
+        # return ret
+        return {k: [] for k in worker_names}
 
 
     def generate_configs(self, deployment: Deployment, config_dir, log_dir):

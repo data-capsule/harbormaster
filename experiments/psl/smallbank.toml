@@ -68,15 +68,23 @@ client_max_retry = 10
 [client_config.workload_config]
 max_concurrent_requests = 5
 
-[client_config.workload_config.request_config.KVReadWriteYCSB]
-num_keys = 300_000
-num_fields = 1
-val_size = 100
-linearizable_reads = false
-byz_commit_ratio = 0.0
+[client_config.workload_config.request_config.Smallbank]
+# frequency_amalgamate = 15
+# frequency_write_check = 15
+# frequency_deposit_checking = 15
+# frequency_transact_savings = 15
+# frequency_send_payment = 25
+# frequency_balance = 15
+frequency_amalgamate = 0
+frequency_write_check = 0
+frequency_deposit_checking = 0
+frequency_transact_savings = 0
+frequency_send_payment = 0
+frequency_balance = 100
+num_accounts = 1000000
+min_balance = 10000.0
+max_balance = 50000.0
 load_phase = true
-zipf_exponent = 0.99
-read_ratio = 0.75
 
 [[experiments]]
 name = "ycsb"
@@ -90,7 +98,7 @@ node_distribution = "uniform"
 storage_distribution = "uniform"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
-duration = 90
+duration = 180
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
