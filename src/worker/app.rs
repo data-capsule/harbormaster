@@ -58,8 +58,8 @@ impl CacheConnector {
         key: Vec<u8>,
     ) -> anyhow::Result<(Vec<u8>, u64), CacheError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let command = CacheCommand::Get(key.clone(), true, tx);
-        // let command = CacheCommand::Get(key.clone(), false, tx);
+        // let command = CacheCommand::Get(key.clone(), true, tx);
+        let command = CacheCommand::Get(key.clone(), false, tx);
 
         self.cache_tx.send(command).await.unwrap();
         let result = rx.await.unwrap();
