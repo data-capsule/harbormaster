@@ -363,7 +363,8 @@ sleep 1
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/psl_lb -a 0.0.0.0:50051 -w {self.remote_workdir}/configs/node0_config.json > {self.remote_workdir}/logs/{repeat_num}/psl_lb.log 2> {self.remote_workdir}/logs/{repeat_num}/psl_lb.err' &
 PID="$PID $!"
 """
-                            coordinator_extra_param = "-s psl_lb -n psl_lb"
+                            # coordinator_extra_param = "-s psl_lb -n psl_lb"
+                            coordinator_extra_param = ""
                         else:
                             psl_lb_command = ""
                             coordinator_extra_param = ""

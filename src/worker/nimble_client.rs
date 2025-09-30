@@ -109,18 +109,22 @@ impl NimbleClient {
         let mut retry_count = 0;
         loop {
             retry_count += 1;
-            if self.__propose_new_counter(hash.clone()).await {
+            let res = self.__propose_new_counter(hash.clone()).await;
+            if res.is_ok() {
                 break;
             }
 
-            self.current_counter += 1;
+            if res.unwrap_err() {
+                self.current_counter += 1;
+            }
+
         }
 
         retry_count
     }
 
 
-    async fn __propose_new_counter(&mut self, hash: HashType) -> bool {
+    async fn __propose_new_counter(&mut self, hash: HashType) -> Result<(), bool> {
         let payload = NimblePayload {
             counter: self.current_counter,
             state_hash: hash.clone().try_into().unwrap(),
@@ -139,7 +143,7 @@ impl NimbleClient {
     }
 
 
-    async fn send_to_nimble(&mut self, tag: Vec<u8>) -> bool {
+    async fn send_to_nimble(&mut self, tag: Vec<u8>) -> Result<(), bool> {
         let addr = format!("{}/counters/{}", self.nimble_endpoint_url, self.handle);
         let request = match self.current_counter {
             0 => {
@@ -166,16 +170,19 @@ impl NimbleClient {
         let res = request.send().await;
         if res.is_err() {
             error!("failed to send request to nimble: {:?}", res);
-            return false;
+            return Err(false);
         }
 
         let res = res.unwrap();
         if res.status() != reqwest::StatusCode::OK && res.status() != reqwest::StatusCode::CREATED {
             warn!("Nimble error: {:?}", res);
-            return false;
+            if res.status() == 409 {
+                return Err(true);
+            }
+            return Err(false);
         }
 
-        true
+        Ok(())
 
     }
 }
