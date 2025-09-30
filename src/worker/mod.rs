@@ -13,9 +13,8 @@ use tokio::{
 
 pub use crate::consensus::batch_proposal::TxWithAckChanTag;
 
-
-#[cfg(feature = "external_cache")]
-use crate::worker::external_cache_manager::ExternalCacheManager;
+#[cfg(feature = "nimble")]
+use crate::worker::nimble_client::NimbleClient;
 use crate::{
     config::{AtomicConfig, AtomicPSLWorkerConfig, PSLWorkerConfig},
     crypto::{AtomicKeyStore, CryptoService, KeyStore},
@@ -46,10 +45,10 @@ pub mod app;
 pub mod block_broadcaster;
 pub mod block_sequencer;
 pub mod cache_manager;
-pub mod external_cache_manager;
 pub mod staging;
 pub mod engines;
 use staging::Staging;
+pub mod nimble_client;
 
 pub struct PSLWorkerServerContext {
     config: AtomicConfig,
@@ -191,10 +190,6 @@ pub struct PSLWorker<E: ClientHandlerTask + Send + Sync + 'static> {
     server: Arc<Server<PinnedPSLWorkerServerContext>>,
     crypto: CryptoService,
 
-    #[cfg(feature = "external_cache")]
-    cache_manager: Arc<Mutex<ExternalCacheManager>>,
-
-    #[cfg(not(feature = "external_cache"))]
     cache_manager: Arc<Mutex<CacheManager>>,
 
     logserver: Arc<Mutex<LogServer>>,
@@ -208,6 +203,9 @@ pub struct PSLWorker<E: ClientHandlerTask + Send + Sync + 'static> {
     app: Arc<Mutex<PSLAppEngine<E>>>,
     __commit_rx_spawner: tokio::sync::broadcast::Receiver<u64>,
     __black_hole_storage: Arc<Mutex<StorageService<BlackHoleStorageEngine>>>,
+
+    #[cfg(feature = "nimble")]
+    nimble_client: Arc<Mutex<NimbleClient>>,
 }
 
 impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
@@ -324,22 +322,11 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             ),
         ));
 
-        #[cfg(not(feature = "external_cache"))]
         let cache_manager = Arc::new(Mutex::new(CacheManager::new(
             config.clone(),
             cache_rx,
             cache_commit_rx,
             sequencer_request_rx,
-            block_rx,
-            block_sequencer_tx,
-            command_tx,
-        )));
-
-        #[cfg(feature = "external_cache")]
-        let cache_manager = Arc::new(Mutex::new(ExternalCacheManager::new(
-            config.clone(),
-            keystore.clone(),
-            cache_rx,
             block_rx,
             block_sequencer_tx,
             command_tx,
@@ -368,6 +355,16 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             Some(staging_tx),
         )));
 
+        #[cfg(feature = "nimble")]
+        let (nimble_tx, nimble_rx) = make_channel(_chan_depth as usize);
+
+        #[cfg(feature = "nimble")]
+        let nimble_client = Arc::new(Mutex::new(NimbleClient::new(
+            config.clone(),
+            keystore.clone(),
+            nimble_rx,
+        )));
+
         let staging = Arc::new(Mutex::new(Staging::new(
             config.clone(), 0,
             crypto.get_connector(),
@@ -377,6 +374,9 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             logserver_tx,
             commit_tx_spawner,
             gc_tx,
+
+            #[cfg(feature = "nimble")]
+            nimble_tx,
         )));
 
         let bb_ow_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
@@ -427,6 +427,9 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             __commit_rx_spawner,
             __black_hole_storage: Arc::new(Mutex::new(__black_hole_storage)),
             storage: Arc::new(Mutex::new(remote_storage)),
+
+            #[cfg(feature = "nimble")]
+            nimble_client,
         }
     }
 
@@ -446,16 +449,15 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         let __black_hole_storage = self.__black_hole_storage.clone();
         let storage = self.storage.clone();
 
+        #[cfg(feature = "nimble")]
+        let nimble_client = self.nimble_client.clone();
+
         handles.spawn(async move {
             let _ = Server::<PinnedPSLWorkerServerContext>::run(server).await;
         });
 
         handles.spawn(async move {
-            #[cfg(not(feature = "external_cache"))]
             let _ = CacheManager::run(cache_manager).await;
-
-            #[cfg(feature = "external_cache")]
-            let _ = ExternalCacheManager::run(cache_manager).await;
         });
 
         handles.spawn(async move {
@@ -487,6 +489,11 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         handles.spawn(async move {
             let mut storage = storage.lock().await;
             storage.run().await;
+        });
+
+        #[cfg(feature = "nimble")]
+        handles.spawn(async move {
+            let _ = NimbleClient::run(nimble_client).await;
         });
 
         handles

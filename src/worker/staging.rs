@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
 use hashbrown::{HashMap, HashSet};
+#[cfg(feature = "nimble")]
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
+#[cfg(feature = "nimble")]
+use crate::crypto::HashType;
 use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
@@ -38,10 +42,20 @@ pub struct Staging {
     commit_index: u64,
     gc_tx: Sender<(SenderType, u64)>,
 
+    #[cfg(feature = "nimble")]
+    nimble_client_tx: Sender<(Sender<()>, HashType)>,
+
 }
 
 impl Staging {
-    pub fn new(config: AtomicPSLWorkerConfig, chain_id: u64, crypto: CryptoServiceConnector, vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>, block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>, client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>) -> Self {
+    pub fn new(config: AtomicPSLWorkerConfig, chain_id: u64, crypto: CryptoServiceConnector,
+        vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>,
+        block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>,
+        client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>,
+
+        #[cfg(feature = "nimble")]
+        nimble_client_tx: Sender<(Sender<()>, HashType)>,
+    ) -> Self {
         Self {
             config,
             chain_id,
@@ -57,6 +71,9 @@ impl Staging {
 
             commit_index: 0,
             gc_tx,
+
+            #[cfg(feature = "nimble")]
+            nimble_client_tx,
         }
     }
 
@@ -146,6 +163,15 @@ impl Staging {
         let me = SenderType::Auth(me, self.chain_id);
         for block in &self.block_buffer {
             if block.block.n > self.commit_index && block.block.n <= new_ci {
+                #[cfg(feature = "nimble")]
+                {
+                    use crate::utils::channel::make_channel;
+
+                    let (tx, rx) = make_channel(1);
+                    self.nimble_client_tx.send((tx, block.block_hash.clone())).await;
+                    let _ = rx.recv().await;
+                }
+
                 let _ = self.logserver_tx.send((me.clone(), block.clone())).await;
             }
         }

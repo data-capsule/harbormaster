@@ -192,6 +192,21 @@ pub struct PSLWorkerConfig {
 
     #[cfg(feature = "evil")]
     pub evil_config: EvilConfig,
+
+
+    #[serde(default = "default_nimble_endpoint_url")]
+    pub nimble_endpoint_url: Option<String>,
+}
+
+const fn default_nimble_endpoint_url() -> Option<String> {
+    None
+}
+
+impl PSLWorkerConfig {
+    /// If you don't set the nimble_endpoint_url, then it will panic.
+    pub fn get_nimble_endpoint_url(&self) -> String {
+        self.nimble_endpoint_url.clone().unwrap()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

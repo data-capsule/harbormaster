@@ -111,13 +111,10 @@ jolteon = ["round_robin_leader", "always_sign", "view_change", "no_pipeline"]
 hotstuff = ["round_robin_leader", "always_sign", "view_change", "no_pipeline", "extra_qc_check"]
 pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
-# Worker features.
-external_cache = []
+# Baseline
+nimble = []
 
 default = ["pirateship", "app_banking", "storage", "fast_path", "platforms", "gossip", "evil"]
-# default = ["signed_raft", "app_kvs", "storage", "fast_path", "platforms", "gossip", "external_cache"]
-# default = ["jolteon", "app_logger", "storage"]
-# default = ["engraft", "app_kvs", "storage", "fast_path", "platforms"]
 
 
 [profile.release]

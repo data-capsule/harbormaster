@@ -9,6 +9,7 @@ pirateship_logger:
 
 .PHONY: nimble
 nimble:
+	CC=clang CXX=clang++ cargo build --release --features pirateship,app_banking,storage,fast_path,platforms,gossip,evil,nimble
 	make -C Nimble
 
 .PHONY: contrib
