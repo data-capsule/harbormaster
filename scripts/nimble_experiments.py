@@ -158,6 +158,27 @@ class NimbleExperiment(PSLExperiment):
                 config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
 
                 node_configs[name] = config
+
+
+                # For PSL LB, need to geenrate a worker config. We will use the name node0.
+                name = "node0"
+                connect_addr = f"{private_ip}:{self.psl_lb_port}"
+                nodelist.append(name[:])
+                domain = f"{name}.pft.org"
+                nodes[name] = {
+                    "addr": connect_addr,
+                    "domain": domain
+                }
+                node_list_for_crypto[name] = (connect_addr, domain)
+                listen_addr = f"0.0.0.0:{self.psl_lb_port}"
+
+                config = deepcopy(self.base_node_config)
+                config["net_config"]["name"] = name
+                config["net_config"]["addr"] = listen_addr
+                data_dir = os.path.join(self.data_dir, f"{name}-db")
+                config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
+                node_configs[name] = config
+                worker_names.append(name)
             else:
                 port += 1
                 _vm = sequencer_vms[rr_cnt % len(sequencer_vms)]
@@ -202,14 +223,19 @@ class NimbleExperiment(PSLExperiment):
             else:
                 v["worker_config"]["gossip_downstream_worker_list"] = []
 
-            v["consensus_config"]["learner_list"] = sequencer_names[:]
+            v["consensus_config"]["learner_list"] =  [] # sequencer_names[:]; When running with Nimble, storage nodes don't send to sequencer.
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path
             v["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
             v["rpc_config"]["allowed_keylist_path"] = allowed_keylist_path
             v["rpc_config"]["signing_priv_key_path"] = signing_priv_key_path
             v["worker_config"]["all_worker_list"] = worker_names[:]
-            v["worker_config"]["storage_list"] = storage_names[:] 
+
+            if k != "node0":
+                v["worker_config"]["storage_list"] = sequencer_names[:] # storage_names[:]; When running with Nimble, workers don't send to storage. But only to sequencer.
+            else:
+                v["worker_config"]["storage_list"] = storage_names[:] # PSL LB needs to know about storage nodes.
+
             v["worker_config"]["sequencer_list"] = sequencer_names[:]
 
             # Only simulate Byzantine behavior in node1.
@@ -329,9 +355,22 @@ PID="$PID $!"
 """
                     else:
                         endorser_param = ",".join([f"http://{ip}:{port}" for ip, port in self.endorser_addrs])
-                        _script += f"""
+                        if self.num_storage_nodes > 0:
+                            psl_lb_command = f"""
 sleep 1
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/coordinator -t 0.0.0.0 -p {self.coordinator_port} -r {self.coordinator_ctrl_port} -e "{endorser_param}" -l 60 > {self.remote_workdir}/logs/{repeat_num}/coordinator.log 2> {self.remote_workdir}/logs/{repeat_num}/coordinator.err' &
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/psl_lb -a 0.0.0.0:50051 -w {self.remote_workdir}/configs/node0_config.json > {self.remote_workdir}/logs/{repeat_num}/psl_lb.log 2> {self.remote_workdir}/logs/{repeat_num}/psl_lb.err' &
+PID="$PID $!"
+"""
+                            coordinator_extra_param = "-s psl_lb -n psl_lb"
+                        else:
+                            psl_lb_command = ""
+                            coordinator_extra_param = ""
+
+                        _script += f"""
+{psl_lb_command}
+
+sleep 1
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/coordinator -t 0.0.0.0 -p {self.coordinator_port} -r {self.coordinator_ctrl_port} -e "{endorser_param}" -l 60 {coordinator_extra_param} > {self.remote_workdir}/logs/{repeat_num}/coordinator.log 2> {self.remote_workdir}/logs/{repeat_num}/coordinator.err' &
 PID="$PID $!"
 
 sleep 1
@@ -371,6 +410,14 @@ sleep 10
                         binary_name = "controller"
                 
                     if binary_name == "kvs":
+                        if self.num_storage_nodes > 0:
+                            log_scp_cmd = f"""
+$SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/psl_lb.log {self.remote_workdir}/logs/{repeat_num}/psl_lb.log || true
+$SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/psl_lb.err {self.remote_workdir}/logs/{repeat_num}/psl_lb.err || true
+"""
+                        else:
+                            log_scp_cmd = ""
+
                         _script += f"""
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c endpoint_rest' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c endpoint_rest' || true
@@ -383,6 +430,8 @@ $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c coordinator' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c psl_lb' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c psl_lb' || true
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c psl_lb' || true
+
+{log_scp_cmd}
 
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/coordinator.log {self.remote_workdir}/logs/{repeat_num}/coordinator.log || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/coordinator.err {self.remote_workdir}/logs/{repeat_num}/coordinator.err || true
