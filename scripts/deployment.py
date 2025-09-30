@@ -393,9 +393,9 @@ class Deployment:
         return s
     
     def get_all_node_vms(self):
-        return [
+        return list(sorted([
             vm for vm in self.nodelist if "node" in vm.name
-        ]
+        ], key=lambda vm: vm.name))
     
     def get_all_client_vms(self):
         return [

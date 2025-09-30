@@ -71,6 +71,10 @@ sleep 10
                 for bin in bin_list:
                     if "node" in bin:
                         binary_name = "server"
+                    elif "storage" in bin:
+                        binary_name = "server"
+                    elif "sequencer" in bin:
+                        binary_name = "server"
                     elif "client" in bin:
                         binary_name = "client"
                     elif "controller" in bin:
