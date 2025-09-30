@@ -50,10 +50,10 @@ impl NimbleClient {
         config: AtomicPSLWorkerConfig, keystore: AtomicKeyStore,
         nimble_rx: Receiver<(Sender<()>, Vec<u8>)>
     ) -> Self {
-        let my_name = &config.get().net_config.name;
-        let pub_key = keystore.get().get_pubkey(my_name).unwrap().clone();
-        let mut handle_bytes = b"nimble_kvs".to_vec();
-        handle_bytes.extend_from_slice(pub_key.as_bytes());
+        // let my_name = &config.get().net_config.name;
+        // let pub_key = keystore.get().get_pubkey(my_name).unwrap().clone();
+        let handle_bytes = b"nimble_kvs".to_vec();
+        // handle_bytes.extend_from_slice(pub_key.as_bytes());
         let handle = hash(&handle_bytes);
         let handle = URL_SAFE.encode(handle.as_slice());
         let nimble_endpoint_url = config.get().get_nimble_endpoint_url();

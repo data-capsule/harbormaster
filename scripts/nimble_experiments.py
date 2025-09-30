@@ -139,6 +139,7 @@ class NimbleExperiment(PSLExperiment):
                 _vm = sequencer_vms[rr_cnt % len(sequencer_vms)]
                 self.binary_mapping[_vm].append(name)                
                 private_ip = _vm.private_ip
+                self.nimble_endpoint_ip = private_ip
                 rr_cnt += 1
                 connect_addr = f"{private_ip}:{seq_port}"
                 
@@ -230,9 +231,10 @@ class NimbleExperiment(PSLExperiment):
             v["rpc_config"]["allowed_keylist_path"] = allowed_keylist_path
             v["rpc_config"]["signing_priv_key_path"] = signing_priv_key_path
             v["worker_config"]["all_worker_list"] = worker_names[:]
+            v["worker_config"]["nimble_endpoint_url"] = f"http://{self.nimble_endpoint_ip}:{self.endpoint_rest_port}"
 
             if k != "node0":
-                v["worker_config"]["storage_list"] = sequencer_names[:] # storage_names[:]; When running with Nimble, workers don't send to storage. But only to sequencer.
+                v["worker_config"]["storage_list"] = storage_names[:]
             else:
                 v["worker_config"]["storage_list"] = storage_names[:] # PSL LB needs to know about storage nodes.
 
@@ -375,10 +377,6 @@ PID="$PID $!"
 
 sleep 1
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/endpoint_rest -t 0.0.0.0 -p {self.endpoint_rest_port} -c "http://127.0.0.1:{self.coordinator_port}" -l 60 > {self.remote_workdir}/logs/{repeat_num}/endpoint_rest.log 2> {self.remote_workdir}/logs/{repeat_num}/endpoint_rest.err' &
-PID="$PID $!"
-
-sleep 1
-$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/{binary_name} -c {self.remote_workdir}/configs/{bin}_config.json -n "http://127.0.0.1:{self.endpoint_rest_port}" > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
 PID="$PID $!"
 """
                     
