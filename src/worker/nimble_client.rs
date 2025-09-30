@@ -25,7 +25,7 @@ pub struct NimbleClient {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct NimblePayload {
     counter: usize,
-    state_hash: [u8; 32],
+    state_hash: Vec<u8>,
 }
 
 
@@ -127,7 +127,7 @@ impl NimbleClient {
     async fn __propose_new_counter(&mut self, hash: HashType) -> Result<(), bool> {
         let payload = NimblePayload {
             counter: self.current_counter,
-            state_hash: hash.clone().try_into().unwrap(),
+            state_hash: hash,
         };
 
         let payload_bytes = bincode::serialize(&payload).unwrap();
