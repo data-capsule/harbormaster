@@ -119,6 +119,7 @@ class NimbleExperiment(PSLExperiment):
         # self.num_sequencer_nodes must be >= 2
         assert self.num_sequencer_nodes >= 2
         self.endorser_addrs = {}
+        rr_cnt = 0
         for node_num in range(1, self.num_sequencer_nodes+1):
             if node_num == 1:
                 port += 1
