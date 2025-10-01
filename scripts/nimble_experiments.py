@@ -118,7 +118,7 @@ class NimbleExperiment(PSLExperiment):
         # Rest of the sequencers are used as endorsers.
         # self.num_sequencer_nodes must be >= 2
         assert self.num_sequencer_nodes >= 2
-        self.endorser_addrs = []
+        self.endorser_addrs = {}
         for node_num in range(1, self.num_sequencer_nodes+1):
             if node_num == 1:
                 port += 1
@@ -188,7 +188,7 @@ class NimbleExperiment(PSLExperiment):
                 
                 private_ip = _vm.private_ip
                 rr_cnt += 1
-                self.endorser_addrs.append((private_ip, port))
+                self.endorser_addrs[name] = (private_ip, port)
 
 
         if self.client_region == -1:
@@ -319,14 +319,13 @@ SCP_CMD="scp -o StrictHostKeyChecking=no -i {self.dev_ssh_key}"
             _script = script_base[:]
 
             # Must run the endorsers first.
-            __endorser_num = 0
+            # __endorser_num = 0
             for vm, bin_list in self.binary_mapping.items():
                 for bin in bin_list:
                     if not("endorser" in bin):
                         continue
 
-                    _, port = self.endorser_addrs[__endorser_num]
-                    __endorser_num += 1
+                    _, port = self.endorser_addrs[bin]
                     
                     _script += f"""
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/endorser -t 0.0.0.0 -p {port} > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
@@ -356,7 +355,7 @@ $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/{binary
 PID="$PID $!"
 """
                     else:
-                        endorser_param = ",".join([f"http://{ip}:{port}" for ip, port in self.endorser_addrs])
+                        endorser_param = ",".join([f"http://{ip}:{port}" for ip, port in self.endorser_addrs.values()])
                         if self.num_storage_nodes > 0:
                             psl_lb_command = f"""
 sleep 1

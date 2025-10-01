@@ -651,7 +651,10 @@ class AWSDeployment(Deployment):
     def get_all_node_vms(self):
         # Node VMs are named sevpool, tdxpool etc.
         # Logic: Find nodes that are not client or storage
-        return list(set(self.nodelist) - set(self.get_all_client_vms()) - set(self.get_all_storage_vms()))
+        return list(sorted(
+            list(set(self.nodelist) - set(self.get_all_client_vms()) - set(self.get_all_storage_vms())),
+            key=lambda x: x.name
+        ))
     
     def get_all_client_vms(self):
         return [
