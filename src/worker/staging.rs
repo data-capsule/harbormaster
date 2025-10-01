@@ -64,6 +64,9 @@ pub struct Staging {
 
     #[cfg(feature = "nimble")]
     nimble_request_sender_rx: Option<UnboundedReceiver<PinnedMessage>>,
+
+    #[cfg(feature = "nimble")]
+    nimble_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Staging {
@@ -115,6 +118,9 @@ impl Staging {
 
             #[cfg(feature = "nimble")]
             nimble_request_sender_rx: Some(nimble_request_sender_rx),
+
+            #[cfg(feature = "nimble")]
+            nimble_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
         }
     }
 
@@ -128,6 +134,7 @@ impl Staging {
             let client = staging.nimble_client.clone();
             let me = SenderType::Auth(staging.config.get().net_config.name.clone(), staging.chain_id);
             let block_broadcaster_to_other_workers_tx = staging.block_broadcaster_to_other_workers_tx.clone();
+            let sema1 = staging.nimble_semaphore.clone();
             tokio::spawn(async move {
 
                 let mut nimble_commit_buffer = HashMap::new();
@@ -147,6 +154,7 @@ impl Staging {
                             nimble_commit_buffer.insert(client_tag, block_n);
                         },
                         Ok(response) = PinnedClient::await_reply(&client, &sequencer) => {
+                            sema1.add_permits(1);
                             let reply = ProtoClientReply::decode(&response.as_ref().0.as_slice()[0..response.as_ref().1]);
                             // info!("Received reply from nimble: {:?}", reply);
                             let Ok(reply) = reply else {
@@ -154,6 +162,7 @@ impl Staging {
                             };
                             
                             client_reply_tags.insert(reply.client_tag);
+
                         }
                     }
 
@@ -201,10 +210,12 @@ impl Staging {
 
             let mut request_rx = staging.nimble_request_sender_rx.take().unwrap();
             let client = staging.nimble_client.clone();
+            let sema2 = staging.nimble_semaphore.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
                         Some(request) = request_rx.recv() => {
+                            let _ = sema2.acquire().await.unwrap();
                             let _ = PinnedClient::send(&client, &"sequencer1".to_string(), request.as_ref()).await;
                         }
                     }
