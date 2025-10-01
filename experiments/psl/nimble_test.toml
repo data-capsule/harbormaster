@@ -99,7 +99,7 @@ data_dir = "/data/"
 # num_nodes = [1, 2, 4, 8, 16]
 # num_nodes = [8]
 # num_clients = [10, 20, 30, 40, 50, 70, 100, 200, 500]
-num_clients = [48]
+num_clients = [48, 240, 480, 640, 1280]
 
 
 
@@ -112,4 +112,4 @@ output = "storage.pdf"
 force_parse = true
 
 [results.legends]
-ycsb_r50_w16 = "psl"
+ycsb_r50_w16 = "nimble"
