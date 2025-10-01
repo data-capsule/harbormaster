@@ -140,6 +140,8 @@ impl Staging {
                 let mut nimble_commit_buffer = HashMap::new();
                 let mut client_reply_tags = HashSet::new();
 
+                let mut new_ci = 0;
+
                 loop {
                     use prost::Message as _;
                     use crate::proto::client::ProtoClientReply;
@@ -179,30 +181,25 @@ impl Staging {
                         }
                     }
 
-                    let mut idxs = Vec::new();
 
                     for client_tag in to_remove {
                         client_reply_tags.remove(&client_tag);
                         let ci = nimble_commit_buffer.remove(&client_tag).unwrap();
-                        idxs.push(ci);
+                        new_ci = new_ci.max(ci);
                     }
 
                     // Preserve invariant that commit indices are sent in ascending order.
-                    idxs.sort();
-                    if idxs.len() > 0 {
-                        let ci = *idxs.last().unwrap();
-                        if ci > 1000 {
-                            let _ = gc_tx.send((me.clone(), ci - 1000)).await;
-                        }
-                
-                        // Send the new commit index to the block broadcaster.
-                        let _ = block_broadcaster_to_other_workers_tx.send(ci).await;
-                
-                        // Send the commit index to the client reply handler.
-                        let _ = client_reply_tx.send(ci);
-                        // info!("Sent commit index to client reply handler: {}", ci);
-
+                    if new_ci > 1000 {
+                        let _ = gc_tx.send((me.clone(), new_ci - 1000)).await;
                     }
+            
+                    // Send the new commit index to the block broadcaster.
+                    let _ = block_broadcaster_to_other_workers_tx.send(new_ci).await;
+            
+                    // Send the commit index to the client reply handler.
+                    let _ = client_reply_tx.send(new_ci);
+                    // info!("Sent commit index to client reply handler: {}", ci);
+
                 }
 
     
