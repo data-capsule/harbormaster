@@ -67,7 +67,7 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 5
+max_concurrent_requests = 1
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 300_000
@@ -99,7 +99,7 @@ data_dir = "/data/"
 # num_nodes = [1, 2, 4, 8, 16]
 # num_nodes = [8]
 # num_clients = [10, 20, 30, 40, 50, 70, 100, 200, 500]
-num_clients = [100]
+num_clients = [48]
 
 
 
