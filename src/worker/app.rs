@@ -483,7 +483,7 @@ impl<T: ClientHandlerTask + Send + Sync + 'static> PSLAppEngine<T> {
 
                     pending_results.retain(|(_, _, seq_num)| *seq_num > commit_seq_num);
 
-                    info!("Sent {} replies", total_replies);
+                    trace!("Sent {} replies", total_replies);
                 }  
             });
         }
