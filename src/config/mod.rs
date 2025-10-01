@@ -231,12 +231,27 @@ const fn default_rate() -> f64 {
 pub struct WorkloadConfig {
     pub num_clients: usize,
     pub duration: u64,
+
+    #[serde(default = "default_ramp_up_ms")]
+    pub ramp_up_ms: u64,
+
+    #[serde(default = "default_ramp_down_ms")]
+    pub ramp_down_ms: u64,
+
     pub max_concurrent_requests: usize,
 
     #[serde(default = "default_rate")]
     pub rate: f64, // in requests per second
 
     pub request_config: RequestConfig
+}
+
+const fn default_ramp_up_ms() -> u64 {
+    0
+}
+
+const fn default_ramp_down_ms() -> u64 {
+    0
 }
 
 impl WorkerConfig {
