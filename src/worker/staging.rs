@@ -141,6 +141,7 @@ impl Staging {
                 let mut client_reply_tags = HashSet::new();
 
                 let mut new_ci = 0;
+                let sequencer = "sequencer1".to_string();
 
                 loop {
                     use prost::Message as _;
@@ -148,23 +149,23 @@ impl Staging {
                     use log::info;
 
 
-                    let sequencer = "sequencer1".to_string();
 
 
                     tokio::select! {
-                        biased;
                         Some((block_n, client_tag)) = nimble_reply_handler_rx.recv() => {
                             nimble_commit_buffer.insert(client_tag, block_n);
                         },
                         Ok(response) = PinnedClient::await_reply(&client, &sequencer) => {
                             sema1.add_permits(1);
                             let reply = ProtoClientReply::decode(&response.as_ref().0.as_slice()[0..response.as_ref().1]);
-                            // info!("Received reply from nimble: {:?}", reply);
+                            info!("Received reply from nimble: {:?}", reply);
                             let Ok(reply) = reply else {
                                 continue;
                             };
                             
                             client_reply_tags.insert(reply.client_tag);
+
+                            info!("Client reply tags: {:?}, Nimble commit buffer: {:?}", client_reply_tags, nimble_commit_buffer);
                         }
                     }
 
