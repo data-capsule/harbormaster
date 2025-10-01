@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 
 #[cfg(feature = "nimble")]
 use crate::{crypto::HashType, rpc::client::PinnedClient};
-use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{make_channel, Receiver, Sender}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
 
@@ -51,6 +51,14 @@ pub struct Staging {
     #[cfg(feature = "nimble")]
     nimble_client_tag: u64,
 
+    #[cfg(feature = "nimble")]
+    nimble_reply_handler_tx: Sender<(u64 /* block_n */, u64 /* client_tag */)>,
+
+    #[cfg(feature = "nimble")]
+    nimble_reply_handler_rx: Option<Receiver<(u64 /* block_n */, u64 /* client_tag */)>>,
+
+
+
 }
 
 impl Staging {
@@ -62,6 +70,8 @@ impl Staging {
         #[cfg(feature = "nimble")]
         nimble_client: PinnedClient,
     ) -> Self {
+
+        let (nimble_reply_handler_tx, nimble_reply_handler_rx) = make_channel(config.get().rpc_config.channel_depth as usize);
         Self {
             config,
             chain_id,
@@ -83,11 +93,90 @@ impl Staging {
 
             #[cfg(feature = "nimble")]
             nimble_client_tag: 0,
+
+            #[cfg(feature = "nimble")]
+            nimble_reply_handler_tx,
+
+            #[cfg(feature = "nimble")]
+            nimble_reply_handler_rx: Some(nimble_reply_handler_rx),
         }
     }
 
     pub async fn run(staging: Arc<Mutex<Self>>) {
         let mut staging = staging.lock().await;
+        #[cfg(feature = "nimble")]
+        {
+            let nimble_reply_handler_rx = staging.nimble_reply_handler_rx.take().unwrap();
+            let client_reply_tx = staging.client_reply_tx.clone();
+            let gc_tx = staging.gc_tx.clone();
+            let client = staging.nimble_client.clone();
+            let me = SenderType::Auth(staging.config.get().net_config.name.clone(), staging.chain_id);
+            let block_broadcaster_to_other_workers_tx = staging.block_broadcaster_to_other_workers_tx.clone();
+            tokio::spawn(async move {
+
+                let mut nimble_commit_buffer = HashMap::new();
+                let mut client_reply_tags = HashSet::new();
+
+                loop {
+                    use prost::Message as _;
+
+                    use crate::proto::client::ProtoClientReply;
+
+                    let sequencer = "sequencer1".to_string();
+
+
+                    tokio::select! {
+                        Some((block_n, client_tag)) = nimble_reply_handler_rx.recv() => {
+                            nimble_commit_buffer.insert(client_tag, block_n);
+                        },
+                        Ok(response) = PinnedClient::await_reply(&client, &sequencer) => {
+                            let reply = ProtoClientReply::decode(&response.as_ref().0.as_slice()[0..response.as_ref().1]);
+                            let Ok(reply) = reply else {
+                                continue;
+                            };
+                            
+                            client_reply_tags.insert(reply.client_tag);
+                        }
+                    }
+
+                    let mut to_remove = Vec::new();
+                    for client_tag in &client_reply_tags {
+                        if nimble_commit_buffer.contains_key(client_tag) {
+                            to_remove.push(*client_tag);
+                        }
+                    }
+
+                    let mut idxs = Vec::new();
+
+                    for client_tag in to_remove {
+                        client_reply_tags.remove(&client_tag);
+                        let ci = nimble_commit_buffer.remove(&client_tag).unwrap();
+                        idxs.push(ci);
+                    }
+
+                    // Preserve invariant that commit indices are sent in ascending order.
+                    idxs.sort();
+
+                    for ci in idxs {
+                        // Reply downstream
+
+                        use log::info;
+                        if ci > 1000 {
+                            let _ = gc_tx.send((me.clone(), ci - 1000)).await;
+                        }
+                
+                        // Send the new commit index to the block broadcaster.
+                        let _ = block_broadcaster_to_other_workers_tx.send(ci).await;
+                
+                        // Send the commit index to the client reply handler.
+                        let _ = client_reply_tx.send(ci);
+                        info!("Sent commit index to client reply handler: {}", ci);
+                    }
+                }
+
+    
+            });
+        }
         staging.worker().await;
     }
     async fn worker(&mut self) {
@@ -182,15 +271,19 @@ impl Staging {
             }
         }
 
-        if self.commit_index > 1000 {
-            let _ = self.gc_tx.send((me.clone(), self.commit_index - 1000)).await;
+        #[cfg(not(feature = "nimble"))]
+        {
+            if self.commit_index > 1000 {
+                let _ = self.gc_tx.send((me.clone(), self.commit_index - 1000)).await;
+            }
+    
+            // Send the new commit index to the block broadcaster.
+            let _ = self.block_broadcaster_to_other_workers_tx.send(new_ci).await;
+    
+            // Send the commit index to the client reply handler.
+            let _ = self.client_reply_tx.send(new_ci);
         }
 
-        // Send the new commit index to the block broadcaster.
-        let _ = self.block_broadcaster_to_other_workers_tx.send(new_ci).await;
-
-        // Send the commit index to the client reply handler.
-        let _ = self.client_reply_tx.send(new_ci);
     }
 
 
@@ -203,7 +296,6 @@ impl Staging {
 
         use crate::{proto::{client::ProtoClientRequest, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::PinnedMessage};
 
-        let start_time = Instant::now();
         let client_request = ProtoClientRequest {
             tx: Some(ProtoTransaction {
                 on_receive: Some(ProtoTransactionPhase {
@@ -231,7 +323,6 @@ impl Staging {
 
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-        let _ = PinnedClient::send_and_await_reply(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
-        info!("Nimble commit time: {:?}", start_time.elapsed());
+        let _ = PinnedClient::send(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
     }
 }

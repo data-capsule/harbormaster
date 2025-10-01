@@ -350,7 +350,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         )));
 
         #[cfg(feature = "nimble")]
-        let nimble_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
+        let nimble_client = Client::new_atomic(og_config.clone(), keystore.clone(), true, 0xdeadbeef).into();
 
 
         let staging = Arc::new(Mutex::new(Staging::new(
