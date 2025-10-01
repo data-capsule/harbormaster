@@ -145,9 +145,9 @@ impl Staging {
 
                     let mut to_remove = Vec::new();
                     for client_tag in &client_reply_tags {
-                        if nimble_commit_buffer.contains_key(client_tag) {
+                        // if nimble_commit_buffer.contains_key(client_tag) {
                             to_remove.push(*client_tag);
-                        }
+                        // }
                     }
 
                     let mut idxs = Vec::new();
@@ -285,7 +285,7 @@ impl Staging {
 
             self.nimble_client_tag += 1;
             let hsh = hash(&block_hash_buffer);
-            self.commit_to_nimble(hsh).await;
+            // self.commit_to_nimble(hsh).await;
             let _ = self.nimble_reply_handler_tx.send((new_ci, self.nimble_client_tag)).await;
         }
 
