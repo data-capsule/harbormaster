@@ -196,11 +196,14 @@ impl Staging {
 
     #[cfg(feature = "nimble")]
     async fn commit_to_nimble(&self, block_hash: HashType) {
+        use std::time::Instant;
+
+        use log::info;
         use prost::Message as _;
 
         use crate::{proto::{client::ProtoClientRequest, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::PinnedMessage};
 
-        
+        let start_time = Instant::now();
         let client_request = ProtoClientRequest {
             tx: Some(ProtoTransaction {
                 on_receive: Some(ProtoTransactionPhase {
@@ -229,5 +232,6 @@ impl Staging {
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
         let _ = PinnedClient::send_and_await_reply(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
+        info!("Nimble commit time: {:?}", start_time.elapsed());
     }
 }
