@@ -265,6 +265,8 @@ impl Staging {
                 {
                     self.nimble_client_tag += 1;
                     self.commit_to_nimble(block.block_hash.clone()).await;
+
+                    let _ = self.nimble_reply_handler_tx.send((block.block.n, self.nimble_client_tag)).await;
                 }
 
                 let _ = self.logserver_tx.send((me.clone(), block.clone())).await;
