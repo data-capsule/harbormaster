@@ -54,19 +54,10 @@ pub struct Staging {
     nimble_client_tag: u64,
 
     #[cfg(feature = "nimble")]
-    nimble_reply_handler_tx: Sender<(u64 /* block_n */, u64 /* client_tag */)>,
-
-    #[cfg(feature = "nimble")]
-    nimble_reply_handler_rx: Option<Receiver<(u64 /* block_n */, u64 /* client_tag */)>>,
-
-    #[cfg(feature = "nimble")]
     nimble_request_sender_tx: UnboundedSender<PinnedMessage>,
 
     #[cfg(feature = "nimble")]
     nimble_request_sender_rx: Option<UnboundedReceiver<PinnedMessage>>,
-
-    #[cfg(feature = "nimble")]
-    nimble_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Staging {
@@ -79,9 +70,6 @@ impl Staging {
         nimble_client: PinnedClient,
     ) -> Self {
 
-        #[cfg(feature = "nimble")]
-        let (nimble_reply_handler_tx, nimble_reply_handler_rx) = make_channel(config.get().rpc_config.channel_depth as usize);
-        
         #[cfg(feature = "nimble")]
         let (nimble_request_sender_tx, nimble_request_sender_rx) = unbounded_channel();
 
@@ -108,19 +96,10 @@ impl Staging {
             nimble_client_tag: 0,
 
             #[cfg(feature = "nimble")]
-            nimble_reply_handler_tx,
-
-            #[cfg(feature = "nimble")]
-            nimble_reply_handler_rx: Some(nimble_reply_handler_rx),
-
-            #[cfg(feature = "nimble")]
             nimble_request_sender_tx,
 
             #[cfg(feature = "nimble")]
             nimble_request_sender_rx: Some(nimble_request_sender_rx),
-
-            #[cfg(feature = "nimble")]
-            nimble_semaphore: Arc::new(tokio::sync::Semaphore::new(5)),
         }
     }
 
@@ -128,93 +107,10 @@ impl Staging {
         let mut staging = staging.lock().await;
         #[cfg(feature = "nimble")]
         {
-            let nimble_reply_handler_rx = staging.nimble_reply_handler_rx.take().unwrap();
-            let client_reply_tx = staging.client_reply_tx.clone();
-            let gc_tx = staging.gc_tx.clone();
-            let client = staging.nimble_client.clone();
-            let me = SenderType::Auth(staging.config.get().net_config.name.clone(), staging.chain_id);
-            let block_broadcaster_to_other_workers_tx = staging.block_broadcaster_to_other_workers_tx.clone();
-            let sema1 = staging.nimble_semaphore.clone();
-            tokio::spawn(async move {
-
-                // let mut nimble_commit_buffer = HashMap::new();
-                // let mut client_reply_tags = HashSet::new();
-
-                let mut new_ci = 0;
-                let sequencer = "sequencer1".to_string();
-
-                loop {
-                    use prost::Message as _;
-                    use crate::proto::client::ProtoClientReply;
-                    use log::info;
-
-
-
-
-                    tokio::select! {
-                        Some((block_n, client_tag)) = nimble_reply_handler_rx.recv() => {
-                            // nimble_commit_buffer.insert(client_tag, block_n);
-                        },
-                        // Ok(response) = PinnedClient::await_reply(&client, &sequencer) => {
-                        //     sema1.add_permits(1);
-                        //     let reply = ProtoClientReply::decode(&response.as_ref().0.as_slice()[0..response.as_ref().1]);
-                        //     info!("Received reply from nimble: {:?}", reply);
-                        //     let Ok(reply) = reply else {
-                        //         continue;
-                        //     };
-                            
-                        //     client_reply_tags.insert(reply.client_tag);
-
-                        //     info!("Client reply tags: {:?}, Nimble commit buffer: {:?}", client_reply_tags, nimble_commit_buffer);
-                        // }
-                    }
-
-                    // let mut to_remove = Vec::new();
-                    // for client_tag in &client_reply_tags {
-                    //     // if nimble_commit_buffer.contains_key(client_tag) {
-                    //         to_remove.push(*client_tag);
-                    //     // }
-                    // }
-
-                    // for (client_tag, _) in nimble_commit_buffer.iter() {
-                    //     if client_reply_tags.contains(client_tag) {
-                    //         to_remove.push(*client_tag);
-                    //     }
-                    // }
-
-
-                    // let mut __new_ci = new_ci;
-                    // for client_tag in to_remove {
-                    //     client_reply_tags.remove(&client_tag);
-                    //     let ci = nimble_commit_buffer.remove(&client_tag).unwrap();
-                    //     __new_ci = __new_ci.max(ci);
-                    // }
-
-
-
-                    // if __new_ci > new_ci {
-                    //     new_ci = __new_ci;
-                    //     // Preserve invariant that commit indices are sent in ascending order.
-                    //     if new_ci > 1000 {
-                    //         let _ = gc_tx.send((me.clone(), new_ci - 1000)).await;
-                    //     }
-                
-                    //     // Send the new commit index to the block broadcaster.
-                    //     let _ = block_broadcaster_to_other_workers_tx.send(new_ci).await;
-                
-                    //     // Send the commit index to the client reply handler.
-                    //     let _ = client_reply_tx.send(new_ci);
-                    //     // info!("Sent commit index to client reply handler: {}", ci);
-                    // }
-
-                }
-
-    
-            });
+            
 
             let mut request_rx = staging.nimble_request_sender_rx.take().unwrap();
             let client = staging.nimble_client.clone();
-            let sema2 = staging.nimble_semaphore.clone();
             let gc_tx = staging.gc_tx.clone();
             let me = SenderType::Auth(staging.config.get().net_config.name.clone(), staging.chain_id);
             let block_broadcaster_to_other_workers_tx = staging.block_broadcaster_to_other_workers_tx.clone();
@@ -223,18 +119,15 @@ impl Staging {
                 loop {
                     use prost::Message as _;
                     use crate::proto::client::ProtoClientReply;
-                    use log::info;
 
                     let mut new_ci = 0;
                     tokio::select! {
                         Some(request) = request_rx.recv() => {
-                            // let _ = sema2.acquire().await.unwrap();
                             let Ok(response) = PinnedClient::send_and_await_reply(&client, &"sequencer1".to_string(), request.as_ref()).await else {
                                 continue;
                             };
 
                             let reply = ProtoClientReply::decode(&response.as_ref().0.as_slice()[0..response.as_ref().1]);
-                            info!("Received reply from nimble: {:?}", reply);
                             let Ok(reply) = reply else {
                                 continue;
                             };
@@ -363,7 +256,6 @@ impl Staging {
             self.nimble_client_tag += 1;
             let hsh = hash(&block_hash_buffer);
             self.commit_to_nimble(hsh).await;
-            let _ = self.nimble_reply_handler_tx.send((new_ci, self.nimble_client_tag)).await;
         }
 
 
@@ -385,9 +277,7 @@ impl Staging {
 
     #[cfg(feature = "nimble")]
     async fn commit_to_nimble(&self, block_hash: HashType) {
-        use std::time::Instant;
 
-        use log::info;
         use prost::Message as _;
 
         use crate::{proto::{client::ProtoClientRequest, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::PinnedMessage};
@@ -420,6 +310,10 @@ impl Staging {
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
         // let _ = PinnedClient::send(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
+
+        // Probably be ok to have a bounded channel here.
+        // I'm too tired to try anything right now.
+        // This just means it takes some time longer to establish proper backpressure.
         let _ = self.nimble_request_sender_tx.send(request);
     }
 }
