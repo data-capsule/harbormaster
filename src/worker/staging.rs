@@ -71,7 +71,9 @@ impl Staging {
         nimble_client: PinnedClient,
     ) -> Self {
 
+        #[cfg(feature = "nimble")]
         let (nimble_reply_handler_tx, nimble_reply_handler_rx) = make_channel(config.get().rpc_config.channel_depth as usize);
+        
         Self {
             config,
             chain_id,
