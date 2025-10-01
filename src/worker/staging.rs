@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use hashbrown::{HashMap, HashSet};
 #[cfg(feature = "nimble")]
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, oneshot};
 use tokio::sync::Mutex;
 
 #[cfg(feature = "nimble")]
-use crate::{crypto::HashType, rpc::client::PinnedClient};
+use crate::{crypto::HashType, proto::client::ProtoClientRequest, rpc::{client::PinnedClient, PinnedMessage}};
+
+
 use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{make_channel, Receiver, Sender}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
@@ -57,8 +59,11 @@ pub struct Staging {
     #[cfg(feature = "nimble")]
     nimble_reply_handler_rx: Option<Receiver<(u64 /* block_n */, u64 /* client_tag */)>>,
 
+    #[cfg(feature = "nimble")]
+    nimble_request_sender_tx: UnboundedSender<PinnedMessage>,
 
-
+    #[cfg(feature = "nimble")]
+    nimble_request_sender_rx: Option<UnboundedReceiver<PinnedMessage>>,
 }
 
 impl Staging {
@@ -74,6 +79,9 @@ impl Staging {
         #[cfg(feature = "nimble")]
         let (nimble_reply_handler_tx, nimble_reply_handler_rx) = make_channel(config.get().rpc_config.channel_depth as usize);
         
+        #[cfg(feature = "nimble")]
+        let (nimble_request_sender_tx, nimble_request_sender_rx) = unbounded_channel();
+
         Self {
             config,
             chain_id,
@@ -101,6 +109,12 @@ impl Staging {
 
             #[cfg(feature = "nimble")]
             nimble_reply_handler_rx: Some(nimble_reply_handler_rx),
+
+            #[cfg(feature = "nimble")]
+            nimble_request_sender_tx,
+
+            #[cfg(feature = "nimble")]
+            nimble_request_sender_rx: Some(nimble_request_sender_rx),
         }
     }
 
@@ -183,6 +197,18 @@ impl Staging {
                 }
 
     
+            });
+
+            let mut request_rx = staging.nimble_request_sender_rx.take().unwrap();
+            let client = staging.nimble_client.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        Some(request) = request_rx.recv() => {
+                            let _ = PinnedClient::send(&client, &"sequencer1".to_string(), request.as_ref()).await;
+                        }
+                    }
+                }
             });
         }
         staging.worker().await;
@@ -348,6 +374,7 @@ impl Staging {
 
         let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
 
-        let _ = PinnedClient::send(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
+        // let _ = PinnedClient::send(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
+        let _ = self.nimble_request_sender_tx.send(request);
     }
 }
