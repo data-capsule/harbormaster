@@ -81,9 +81,8 @@ impl NimbleClient {
         let my_name = &client.config.get().net_config.name;
         if my_name == "node1" {
             client.propose_new_counter(vec![0u8; 32]).await;
-        } else {
-            client.current_counter += 1;
         }
+        client.current_counter += 1;
 
         loop {
             tokio::select! {
@@ -119,9 +118,11 @@ impl NimbleClient {
                 break;
             }
 
-            if res.unwrap_err() {
-                self.current_counter += 1;
-            }
+            // if res.unwrap_err() {
+            //     self.current_counter += 1;
+            // }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
 
         }
 
