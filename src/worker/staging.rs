@@ -120,7 +120,7 @@ impl Staging {
             nimble_request_sender_rx: Some(nimble_request_sender_rx),
 
             #[cfg(feature = "nimble")]
-            nimble_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            nimble_semaphore: Arc::new(tokio::sync::Semaphore::new(5)),
         }
     }
 
