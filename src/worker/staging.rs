@@ -152,6 +152,7 @@ impl Staging {
 
 
                     tokio::select! {
+                        biased;
                         Some((block_n, client_tag)) = nimble_reply_handler_rx.recv() => {
                             nimble_commit_buffer.insert(client_tag, block_n);
                         },
@@ -164,7 +165,6 @@ impl Staging {
                             };
                             
                             client_reply_tags.insert(reply.client_tag);
-
                         }
                     }
 
@@ -182,23 +182,29 @@ impl Staging {
                     }
 
 
+                    let mut __new_ci = new_ci;
                     for client_tag in to_remove {
                         client_reply_tags.remove(&client_tag);
                         let ci = nimble_commit_buffer.remove(&client_tag).unwrap();
-                        new_ci = new_ci.max(ci);
+                        __new_ci = __new_ci.max(ci);
                     }
 
-                    // Preserve invariant that commit indices are sent in ascending order.
-                    if new_ci > 1000 {
-                        let _ = gc_tx.send((me.clone(), new_ci - 1000)).await;
+
+
+                    if __new_ci > new_ci {
+                        new_ci = __new_ci;
+                        // Preserve invariant that commit indices are sent in ascending order.
+                        if new_ci > 1000 {
+                            let _ = gc_tx.send((me.clone(), new_ci - 1000)).await;
+                        }
+                
+                        // Send the new commit index to the block broadcaster.
+                        let _ = block_broadcaster_to_other_workers_tx.send(new_ci).await;
+                
+                        // Send the commit index to the client reply handler.
+                        let _ = client_reply_tx.send(new_ci);
+                        // info!("Sent commit index to client reply handler: {}", ci);
                     }
-            
-                    // Send the new commit index to the block broadcaster.
-                    let _ = block_broadcaster_to_other_workers_tx.send(new_ci).await;
-            
-                    // Send the commit index to the client reply handler.
-                    let _ = client_reply_tx.send(new_ci);
-                    // info!("Sent commit index to client reply handler: {}", ci);
 
                 }
 

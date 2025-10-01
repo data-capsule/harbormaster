@@ -204,7 +204,7 @@ class NimbleExperiment(PSLExperiment):
         print("Sequencer names", sequencer_names)
         print("Endorser addrs", self.endorser_addrs)
 
-        gossip_downstream_worker_list = self.generate_multicast_tree(worker_names, 2)
+        gossip_downstream_worker_list = self.generate_multicast_tree([x for x in worker_names if x != "node0"], 2)
 
         print("Gossip downstream worker list", gossip_downstream_worker_list)
 
@@ -220,7 +220,7 @@ class NimbleExperiment(PSLExperiment):
                 v["consensus_config"]["node_list"] = nodelist[:]
 
             if k in worker_names:
-                v["worker_config"]["gossip_downstream_worker_list"] = gossip_downstream_worker_list[k]
+                v["worker_config"]["gossip_downstream_worker_list"] = gossip_downstream_worker_list.get(k, [])
             else:
                 v["worker_config"]["gossip_downstream_worker_list"] = []
 
@@ -230,7 +230,7 @@ class NimbleExperiment(PSLExperiment):
             v["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
             v["rpc_config"]["allowed_keylist_path"] = allowed_keylist_path
             v["rpc_config"]["signing_priv_key_path"] = signing_priv_key_path
-            v["worker_config"]["all_worker_list"] = worker_names[:]
+            v["worker_config"]["all_worker_list"] = [x for x in worker_names if x != "node0"]
             v["worker_config"]["nimble_endpoint_url"] = f"http://{self.nimble_endpoint_ip}:{self.endpoint_rest_port}"
 
             if k != "node0":
@@ -257,7 +257,7 @@ class NimbleExperiment(PSLExperiment):
             config["net_config"]["name"] = client
 
             client_nodes = deepcopy(nodes)
-            client_nodes = {k: v for k, v in client_nodes.items() if k in worker_names}
+            client_nodes = {k: v for k, v in client_nodes.items() if k in worker_names and k != "node0"}
             config["net_config"]["nodes"] = client_nodes
 
             tls_cert_path, tls_key_path, tls_root_ca_cert_path,\
