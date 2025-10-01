@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "nimble")]
-use crate::crypto::HashType;
+use crate::{crypto::HashType, rpc::client::PinnedClient};
 use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{Receiver, Sender}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
@@ -42,8 +42,14 @@ pub struct Staging {
     commit_index: u64,
     gc_tx: Sender<(SenderType, u64)>,
 
+    // #[cfg(feature = "nimble")]
+    // nimble_client_tx: Sender<(Sender<()>, HashType)>,
+
     #[cfg(feature = "nimble")]
-    nimble_client_tx: Sender<(Sender<()>, HashType)>,
+    nimble_client: PinnedClient,
+
+    #[cfg(feature = "nimble")]
+    nimble_client_tag: u64,
 
 }
 
@@ -54,7 +60,7 @@ impl Staging {
         client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>,
 
         #[cfg(feature = "nimble")]
-        nimble_client_tx: Sender<(Sender<()>, HashType)>,
+        nimble_client: PinnedClient,
     ) -> Self {
         Self {
             config,
@@ -73,7 +79,10 @@ impl Staging {
             gc_tx,
 
             #[cfg(feature = "nimble")]
-            nimble_client_tx,
+            nimble_client,
+
+            #[cfg(feature = "nimble")]
+            nimble_client_tag: 0,
         }
     }
 
@@ -165,11 +174,8 @@ impl Staging {
             if block.block.n > self.commit_index && block.block.n <= new_ci {
                 #[cfg(feature = "nimble")]
                 {
-                    use crate::utils::channel::make_channel;
-
-                    let (tx, rx) = make_channel(1);
-                    self.nimble_client_tx.send((tx, block.block_hash.clone())).await;
-                    let _ = rx.recv().await;
+                    self.nimble_client_tag += 1;
+                    self.commit_to_nimble(block.block_hash.clone()).await;
                 }
 
                 let _ = self.logserver_tx.send((me.clone(), block.clone())).await;
@@ -185,5 +191,43 @@ impl Staging {
 
         // Send the commit index to the client reply handler.
         let _ = self.client_reply_tx.send(new_ci);
+    }
+
+
+    #[cfg(feature = "nimble")]
+    async fn commit_to_nimble(&self, block_hash: HashType) {
+        use prost::Message as _;
+
+        use crate::{proto::{client::ProtoClientRequest, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::PinnedMessage};
+
+        
+        let client_request = ProtoClientRequest {
+            tx: Some(ProtoTransaction {
+                on_receive: Some(ProtoTransactionPhase {
+                    ops: vec![ProtoTransactionOp {
+                        op_type: ProtoTransactionOpType::Write as i32,
+                        operands: vec![block_hash],
+                    }],
+                }),
+                on_crash_commit: None,
+                on_byzantine_commit: None,
+                is_reconfiguration: false,
+                is_2pc: false,
+            }),
+            origin: self.config.get().net_config.name.clone(),
+            sig: vec![0u8; 1],
+            client_tag: self.nimble_client_tag,
+        };
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::ClientRequest(client_request)),
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+
+        let request = PinnedMessage::from(buf, sz, crate::rpc::SenderType::Anon);
+
+        let _ = PinnedClient::send_and_await_reply(&self.nimble_client, &"sequencer1".to_string(), request.as_ref()).await;
     }
 }

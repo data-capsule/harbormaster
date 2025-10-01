@@ -379,6 +379,10 @@ PID="$PID $!"
 sleep 1
 $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/endpoint_rest -t 0.0.0.0 -p {self.endpoint_rest_port} -c "http://127.0.0.1:{self.coordinator_port}" -l 60 > {self.remote_workdir}/logs/{repeat_num}/endpoint_rest.log 2> {self.remote_workdir}/logs/{repeat_num}/endpoint_rest.err' &
 PID="$PID $!"
+
+sleep 1
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} '{self.remote_workdir}/build/{binary_name} -c {self.remote_workdir}/configs/{bin}_config.json -n "http://127.0.0.1:{self.endpoint_rest_port}" > {self.remote_workdir}/logs/{repeat_num}/{bin}.log 2> {self.remote_workdir}/logs/{repeat_num}/{bin}.err' &
+PID="$PID $!"
 """
                     
             _script += f"""

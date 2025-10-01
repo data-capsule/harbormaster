@@ -13,8 +13,6 @@ use tokio::{
 
 pub use crate::consensus::batch_proposal::TxWithAckChanTag;
 
-#[cfg(feature = "nimble")]
-use crate::worker::nimble_client::NimbleClient;
 use crate::{
     config::{AtomicConfig, AtomicPSLWorkerConfig, PSLWorkerConfig},
     crypto::{AtomicKeyStore, CryptoService, KeyStore},
@@ -48,7 +46,6 @@ pub mod cache_manager;
 pub mod staging;
 pub mod engines;
 use staging::Staging;
-pub mod nimble_client;
 
 pub struct PSLWorkerServerContext {
     config: AtomicConfig,
@@ -203,9 +200,6 @@ pub struct PSLWorker<E: ClientHandlerTask + Send + Sync + 'static> {
     app: Arc<Mutex<PSLAppEngine<E>>>,
     __commit_rx_spawner: tokio::sync::broadcast::Receiver<u64>,
     __black_hole_storage: Arc<Mutex<StorageService<BlackHoleStorageEngine>>>,
-
-    #[cfg(feature = "nimble")]
-    nimble_client: Arc<Mutex<NimbleClient>>,
 }
 
 impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
@@ -356,14 +350,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         )));
 
         #[cfg(feature = "nimble")]
-        let (nimble_tx, nimble_rx) = make_channel(_chan_depth as usize);
+        let nimble_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
 
-        #[cfg(feature = "nimble")]
-        let nimble_client = Arc::new(Mutex::new(NimbleClient::new(
-            config.clone(),
-            keystore.clone(),
-            nimble_rx,
-        )));
 
         let staging = Arc::new(Mutex::new(Staging::new(
             config.clone(), 0,
@@ -376,7 +364,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             gc_tx,
 
             #[cfg(feature = "nimble")]
-            nimble_tx,
+            nimble_client,
         )));
 
         let bb_ow_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
@@ -427,9 +415,6 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             __commit_rx_spawner,
             __black_hole_storage: Arc::new(Mutex::new(__black_hole_storage)),
             storage: Arc::new(Mutex::new(remote_storage)),
-
-            #[cfg(feature = "nimble")]
-            nimble_client,
         }
     }
 
@@ -448,9 +433,6 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
 
         let __black_hole_storage = self.__black_hole_storage.clone();
         let storage = self.storage.clone();
-
-        #[cfg(feature = "nimble")]
-        let nimble_client = self.nimble_client.clone();
 
         handles.spawn(async move {
             let _ = Server::<PinnedPSLWorkerServerContext>::run(server).await;
@@ -489,11 +471,6 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         handles.spawn(async move {
             let mut storage = storage.lock().await;
             storage.run().await;
-        });
-
-        #[cfg(feature = "nimble")]
-        handles.spawn(async move {
-            let _ = NimbleClient::run(nimble_client).await;
         });
 
         handles
