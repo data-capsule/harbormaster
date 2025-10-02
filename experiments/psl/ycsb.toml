@@ -66,7 +66,7 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 5
+max_concurrent_requests = 1
 ramp_up_ms = 10_000
 ramp_down_ms = 10_000
 
@@ -97,7 +97,7 @@ duration = 90
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
-num_clients = [10, 20, 30, 40, 50, 70, 100, 200, 500]
+num_clients = [48, 96, 240, 480, 640, 1280]
 
 [[experiments]]
 name = "ycsb_r50_w16_nimble"
@@ -116,7 +116,8 @@ duration = 90
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
-num_clients = [10, 20, 30, 40, 50, 70, 100, 200, 500]
+num_clients = [48, 96, 240, 480, 640, 1280]
+
 
 [[results]]
 name = "throughput_latency_client_sweep"

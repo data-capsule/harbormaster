@@ -230,10 +230,17 @@ class Deployment:
                 f"mkdir -p {self.workdir}",
             ], self.ssh_user, self.ssh_key, node)
 
-        res = run_local([
+        run_local([
+            f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.workdir}/* {self.ssh_user}@{self.dev_vm.public_ip}:~/{self.workdir}/"
+        ], hide=False, asynchronous=False)
+
+        ssh_cmds = [
             f"rsync -avz -e 'ssh -o StrictHostKeyChecking=no -i {self.ssh_key}' {self.workdir}/* {self.ssh_user}@{node.public_ip}:~/{self.workdir}/"
             for node in nodelist
-        ], hide=True, asynchronous=True)
+        ]
+
+        print(ssh_cmds)
+        res = run_remote_public_ip(ssh_cmds, self.ssh_user, self.ssh_key, self.dev_vm)
 
         for (i, node) in enumerate(nodelist):
             print("Copied to", node.name, "Output (truncated):\n", "\n".join(res[i].split("\n")[-2:]))
