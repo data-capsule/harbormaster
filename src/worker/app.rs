@@ -70,7 +70,7 @@ impl CacheConnector {
 
         result.map(|v| {
             match v {
-                CachedValue::DWW(v) => (v.value.clone(), v.seq_num),
+                CachedValue::DWW(v) => (v.value, v.seq_num),
                 CachedValue::PNCounter(v) => (v.get_value().to_be_bytes().to_vec(), 0),
             }
         })

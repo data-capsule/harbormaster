@@ -317,7 +317,7 @@ sleep 60
             v["net_config"]["nodes"] = deepcopy(nodes)
 
             if k in sequencer_names:
-                v["consensus_config"]["node_list"] = [storage_names[0]] # storage_names[:]
+                v["consensus_config"]["node_list"] = storage_names[:]
             else:
                 v["consensus_config"]["node_list"] = nodelist[:]
 
@@ -326,10 +326,8 @@ sleep 60
             else:
                 v["worker_config"]["gossip_downstream_worker_list"] = []
 
-            if k == storage_names[0]:
-                v["consensus_config"]["learner_list"] = sequencer_names[:]
-            else:
-                v["consensus_config"]["learner_list"] = []
+            # if True or k == storage_names[0]:
+            v["consensus_config"]["learner_list"] = sequencer_names[:]
 
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path
