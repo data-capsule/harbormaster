@@ -1,5 +1,6 @@
 use std::{collections::HashSet, fmt::{self, Debug, Display}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
+use eth_trie::{EthTrie, MemoryDB, Trie as _};
 use hashbrown::HashMap;
 use itertools::Itertools;
 use log::{error, info, trace, warn};
@@ -269,6 +270,8 @@ pub struct BlockSequencer {
 
     must_flush_before_next_other_write_op: bool,
     is_quiscent: bool,
+
+    mpt: EthTrie<MemoryDB>,
 }
 
 impl BlockSequencer {
@@ -300,6 +303,8 @@ impl BlockSequencer {
             __num_times_blocked: 0,
             must_flush_before_next_other_write_op: false,
             is_quiscent: true,
+
+            mpt: EthTrie::new(Arc::new(MemoryDB::new(false))),
         }
     }
 
@@ -585,7 +590,12 @@ impl BlockSequencer {
 
         // self.all_write_op_bag.push((b"bleh".to_vec(), CachedValue::new_dww(b"bleh".to_vec(), BigInt::from(1))));
 
+        let root_hash = self.make_root_hash();
+
         let self_reads = self.self_read_op_bag.drain(..).collect::<Vec<_>>();
+        let mut read_set = Self::prepare_read_set(self_reads);
+        read_set.push((b"root_hash".to_vec(), root_hash, origin.clone(), 0));
+
 
         let all_writes = Self::wrap_vec(
             Self::dedup_vec(self.all_write_op_bag.drain(..)),
@@ -598,7 +608,7 @@ impl BlockSequencer {
 
         let self_writes_and_reads = Self::wrap_vec(
             self.self_write_op_bag.drain(..).collect(),
-            Self::prepare_read_set(self_reads),
+            read_set,
             seq_num,
             Some(read_vc.serialize()),
             origin,
@@ -778,6 +788,16 @@ impl BlockSequencer {
             })
             .sorted_by_key(|(_, _, _, after_write_op_index)| *after_write_op_index)
             .collect()
+    }
+
+
+    fn make_root_hash(&mut self) -> HashType {
+        for (key, value) in self.all_write_op_bag.iter() {
+            self.mpt.insert(&key, &bincode::serialize(&value).unwrap()).unwrap();
+        }
+
+        let root_hash = self.mpt.root_hash().unwrap().to_vec();
+        root_hash
     }
 }
 

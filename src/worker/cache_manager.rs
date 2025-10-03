@@ -1,5 +1,4 @@
-use std::{collections::HashSet, fs::File, io::{BufWriter, Write}, pin::Pin, sync::Arc, time::{Duration, Instant}};
-
+use std::{collections::HashSet, fs::File, io::{BufWriter, Write}, ops::{Deref, DerefMut}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 use hashbrown::HashMap;
 use log::{error, info, trace, warn};
 use num_bigint::{BigInt, Sign};
@@ -446,6 +445,28 @@ impl CachedValue {
 
 pub type CacheKey = Vec<u8>;
 
+pub struct Cache(HashMap<CacheKey, CachedValue>);
+
+impl Cache {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl Deref for Cache {
+    type Target = HashMap<CacheKey, CachedValue>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Cache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+
 pub struct CacheManager {
     config: AtomicPSLWorkerConfig,
     command_rx: tokio::sync::mpsc::Receiver<CacheCommand>,
@@ -455,7 +476,7 @@ pub struct CacheManager {
     
     block_sequencer_tx: Sender<SequencerCommand>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
-    cache: HashMap<CacheKey, CachedValue>,
+    cache: Cache,
     value_origin: HashMap<CacheKey, SenderType>,
 
     last_committed_seq_num: u64,
@@ -504,7 +525,7 @@ impl CacheManager {
             block_rx,
             block_sequencer_tx,
             fork_receiver_cmd_tx,
-            cache: HashMap::new(),
+            cache: Cache::new(),
             value_origin: HashMap::new(),
 
             last_committed_seq_num: 0,
