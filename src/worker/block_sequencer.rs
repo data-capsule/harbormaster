@@ -793,7 +793,11 @@ impl BlockSequencer {
 
     fn make_root_hash(&mut self) -> HashType {
         for (key, value) in self.all_write_op_bag.iter() {
-            self.mpt.insert(&key, &bincode::serialize(&value).unwrap()).unwrap();
+            let hsh = match value {
+                CachedValue::DWW(value) => &value.val_hash.to_bytes_be().1,
+                CachedValue::PNCounter(value) => &value.get_value().to_be_bytes().to_vec(),
+            };
+            self.mpt.insert(&key, hsh).unwrap();
         }
 
         let root_hash = self.mpt.root_hash().unwrap().to_vec();
