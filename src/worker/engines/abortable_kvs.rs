@@ -136,11 +136,11 @@ impl ClientHandlerTask for AbortableKVSTask {
         trace!("Committed with VC: {} Locked keys: {:?}", vc,
             locked_keys.iter().map(|key| String::from_utf8(key.clone()).unwrap_or(hex::encode(key.clone()))).collect::<Vec<_>>());
 
-        let vc = if all_reads {
-            VectorClock::new() // Doesn't matter. If all reads, there are no locked keys.
-        } else {
-            vc
-        };
+        // let vc = if all_reads {
+        //     VectorClock::new() // Doesn't matter. If all reads, there are no locked keys.
+        // } else {
+        //     vc
+        // };
         self.cache_connector.dispatch_unlock_request(locked_keys.iter().map(|key| (key.clone(), vc.clone())).collect()).await;
         trace!("Commit and unlock time: {:?}", start_time.elapsed());
 
