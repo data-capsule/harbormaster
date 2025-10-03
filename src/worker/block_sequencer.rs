@@ -17,6 +17,11 @@ pub enum BlockSeqNumQuery {
     WaitForSeqNum(oneshot::Sender<u64>),
 }
 
+pub struct AdvanceVCCommand {
+    pub sender: SenderType,
+    pub block_seq_num: u64,
+}
+
 pub enum SequencerCommand {
     /// Write Op from myself
     SelfWriteOp {
@@ -44,10 +49,7 @@ pub enum SequencerCommand {
     },
 
     /// Advance the vector clock in the sequencer.
-    AdvanceVC {
-        sender: SenderType,
-        block_seq_num: u64
-    },
+    AdvanceVC(Vec<AdvanceVCCommand>),
 
     /// Blocks can only be formed on receiving this token.
     /// Helps maintain atomicity.
@@ -376,35 +378,37 @@ impl BlockSequencer {
                 self.all_write_op_bag.push((key, value));
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
             },
-            SequencerCommand::AdvanceVC { sender, block_seq_num } => {
+            SequencerCommand::AdvanceVC(commands) => {
                 while self.must_flush_before_next_other_write_op {
                     // Pretend there is a ForceMakeNewBlock before this.
                     self.force_prepare_new_block().await;
                 }
                 assert!(self.self_read_op_bag.is_empty());
                 
-                if block_seq_num == 0 {
-                    // We want to keep the succint reprensentation.
-                    return;
-                }
+                for AdvanceVCCommand { sender, block_seq_num } in commands {
+                    if block_seq_num == 0 {
+                        // We want to keep the succint reprensentation.
+                        continue;
+                    }
 
-                let is_quiscent = self.self_read_op_bag.is_empty() && self.self_write_op_bag.is_empty() && self.all_write_op_bag.is_empty();
-                trace!("self.is_quiscent: {} is_quiscent: {} read_ops: {} all_write_ops: {} self_write_ops: {} vc_wait_buffer: {}", self.is_quiscent, is_quiscent, self.self_read_op_bag.len(), self.all_write_op_bag.len(), self.self_write_op_bag.len(), self.vc_wait_buffer.len());
-                
-                if self.is_quiscent && !is_quiscent {
-                    self.is_quiscent = false;
-                }
+                    let is_quiscent = self.self_read_op_bag.is_empty() && self.self_write_op_bag.is_empty() && self.all_write_op_bag.is_empty();
+                    trace!("self.is_quiscent: {} is_quiscent: {} read_ops: {} all_write_ops: {} self_write_ops: {} vc_wait_buffer: {}", self.is_quiscent, is_quiscent, self.self_read_op_bag.len(), self.all_write_op_bag.len(), self.self_write_op_bag.len(), self.vc_wait_buffer.len());
+                    
+                    if self.is_quiscent && !is_quiscent {
+                        self.is_quiscent = false;
+                    }
 
-                // let set_dirty_condition = !self.is_quiscent || self.vc_wait_buffer.len() > 0;
-                let _actually_advanced = self.curr_vector_clock.advance(sender, block_seq_num);
+                    // let set_dirty_condition = !self.is_quiscent || self.vc_wait_buffer.len() > 0;
+                    let _actually_advanced = self.curr_vector_clock.advance(sender, block_seq_num);
 
-                if _actually_advanced {
-                    self.__vc_dirty = true;
+                    if _actually_advanced {
+                        self.__vc_dirty = true;
+                    }
+                    self.is_quiscent = is_quiscent;
                 }
                 // self.send_heartbeat().await;
                 self.flush_vc_wait_buffer().await;
 
-                self.is_quiscent = is_quiscent;
             },
             SequencerCommand::MakeNewBlock(sender_did_prepare, sender_vc, force_prepare) => {
                 let actually_did_prepare = self.maybe_prepare_new_block(force_prepare).await;

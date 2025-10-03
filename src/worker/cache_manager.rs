@@ -7,7 +7,7 @@ use num_bigint::{BigInt, Sign};
 use rand::distr::{Distribution, weighted::WeightedIndex};
 use thiserror::Error;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot::{self, error::RecvError}, Mutex};
-use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, BlockSeqNumQuery, VectorClock}, TxWithAckChanTag}};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, AdvanceVCCommand, BlockSeqNumQuery, VectorClock}, TxWithAckChanTag}};
 use crate::worker::block_sequencer::SequencerCommand;
 
 #[derive(Error, Debug)]
@@ -758,15 +758,15 @@ impl CacheManager {
                 // Henceforth, all reads are based on this snapshot.
                 // Until the block sequencer proposes the new block. After that, the snapshot can be updated.
                 // let (current_vc_tx, current_vc_rx) = oneshot::channel();
-                // let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
-                //     key: key.clone(),
-                //     value: res.map(|v| v.clone()),
-                //     snapshot_propagated_signal_tx,
-                //     origin,
-                //     seq_num_query,
-                //     // current_vc: current_vc_tx,
-                // }).await;
-                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: res.cloned().unwrap_or(CachedValue::new_dww(vec![], BigInt::from_bytes_be(Sign::Plus, &hash(&key)))), seq_num_query, /* current_vc: current_vc_tx */ }).await;
+                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
+                    key: key.clone(),
+                    value: res.map(|v| v.clone()),
+                    snapshot_propagated_signal_tx,
+                    origin,
+                    seq_num_query,
+                    // current_vc: current_vc_tx,
+                }).await;
+                // let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: res.cloned().unwrap_or(CachedValue::new_dww(vec![], BigInt::from_bytes_be(Sign::Plus, &hash(&key)))), seq_num_query, /* current_vc: current_vc_tx */ }).await;
 
                 // let current_vc = current_vc_rx.await.unwrap();
 
@@ -980,21 +980,25 @@ impl CacheManager {
         }
 
         // Advance the vector clock in the sequencer.
+        let mut advance_vc_commands = vec![];
         if block.block.vector_clock.is_some() {
             let vector_clock = block.block.vector_clock.as_ref().unwrap();
             for entry in vector_clock.entries.iter() {
                 let sender = SenderType::Auth(entry.sender.clone(), 0);
-                let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC { sender, block_seq_num: entry.seq_num }).await;
+                // let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC { sender, block_seq_num: entry.seq_num }).await;
+                advance_vc_commands.push(AdvanceVCCommand { sender, block_seq_num: entry.seq_num });
             }
         }
 
         
         if !name.contains("god") {
             let block_seq_num = block.block.n;
-            let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
-                sender: sender.clone(),
-                block_seq_num,
-            }).await;
+            // let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC {
+            //     sender: sender.clone(),
+            //     block_seq_num,
+            // }).await;
+            advance_vc_commands.push(AdvanceVCCommand { sender: sender.clone(), block_seq_num });
+            let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC(advance_vc_commands)).await;
         
             // A new block can be formed now.
             let (tx, rx) = oneshot::channel();
@@ -1006,6 +1010,8 @@ impl CacheManager {
             
             // Confirm the block to the fork receiver.
             let _ = self.fork_receiver_cmd_tx.send(ForkReceiverCommand::Confirm(sender, block_seq_num));
+        } else {
+            let _ = self.block_sequencer_tx.send(SequencerCommand::AdvanceVC(advance_vc_commands)).await;
         }
 
     }
