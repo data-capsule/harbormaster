@@ -317,7 +317,7 @@ sleep 60
             v["net_config"]["nodes"] = deepcopy(nodes)
 
             if k in sequencer_names:
-                v["consensus_config"]["node_list"] = storage_names[:]
+                v["consensus_config"]["node_list"] = [storage_names[0]] # storage_names[:]
             else:
                 v["consensus_config"]["node_list"] = nodelist[:]
 
@@ -326,7 +326,11 @@ sleep 60
             else:
                 v["worker_config"]["gossip_downstream_worker_list"] = []
 
-            v["consensus_config"]["learner_list"] = sequencer_names[:]
+            if k == storage_names[0]:
+                v["consensus_config"]["learner_list"] = sequencer_names[:]
+            else:
+                v["consensus_config"]["learner_list"] = []
+
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path
             v["net_config"]["tls_root_ca_cert_path"] = tls_root_ca_cert_path
@@ -347,6 +351,7 @@ sleep 60
         num_clients_per_vm = [self.num_clients // len(client_vms) for _ in range(len(client_vms))]
         num_clients_per_vm[-1] += (self.num_clients - sum(num_clients_per_vm))
 
+        client_start_index = 0
         for client_num in range(len(client_vms)):
             config = deepcopy(self.base_client_config)
             client = "client" + str(client_num + 1)
@@ -364,6 +369,8 @@ sleep 60
 
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
             config["workload_config"]["duration"] = self.duration
+            config["workload_config"]["start_index"] = client_start_index
+            client_start_index += num_clients_per_vm[client_num]
 
             self.binary_mapping[client_vms[client_num]].append(client)
 

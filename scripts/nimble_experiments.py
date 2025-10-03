@@ -252,6 +252,7 @@ class NimbleExperiment(PSLExperiment):
         num_clients_per_vm = [self.num_clients // len(client_vms) for _ in range(len(client_vms))]
         num_clients_per_vm[-1] += (self.num_clients - sum(num_clients_per_vm))
 
+        client_start_index = 0
         for client_num in range(len(client_vms)):
             config = deepcopy(self.base_client_config)
             client = "client" + str(client_num + 1)
@@ -269,6 +270,8 @@ class NimbleExperiment(PSLExperiment):
 
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
             config["workload_config"]["duration"] = self.duration
+            config["workload_config"]["start_index"] = client_start_index
+            client_start_index += num_clients_per_vm[client_num]
 
             self.binary_mapping[client_vms[client_num]].append(client)
 
@@ -412,7 +415,8 @@ sleep 10
                     elif "controller" in bin:
                         binary_name = "controller"
                     elif "endorser" in bin:
-                        binary_name = "endorser"
+                        # binary_name = "endorser"
+                        continue # Endorsers killed last.
                 
                     if binary_name == "kvs":
                         if self.num_storage_nodes > 0:
@@ -457,9 +461,22 @@ $SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'rm -rf /data/*' || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
 $SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.err {self.remote_workdir}/logs/{repeat_num}/{bin}.err || true
 """
+
+            for vm, bin_list in self.binary_mapping.items():
+                for bin in bin_list:
+                    if not("endorser" in bin):
+                        continue
+
+                    _script += f"""
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -2 -c endorser' || true
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -15 -c endorser' || true
+$SSH_CMD {self.dev_ssh_user}@{vm.public_ip} 'pkill -9 -c endorser' || true
+$SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.log {self.remote_workdir}/logs/{repeat_num}/{bin}.log || true
+$SCP_CMD {self.dev_ssh_user}@{vm.public_ip}:{self.remote_workdir}/logs/{repeat_num}/{bin}.err {self.remote_workdir}/logs/{repeat_num}/{bin}.err || true
+"""
                     
             _script += f"""
-sleep 60
+sleep 10
 """
                     
             # pkill -9 -c server also kills tmux-server. So we can't run a server on the dev VM.

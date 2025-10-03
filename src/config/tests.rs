@@ -141,6 +141,7 @@ fn test_clientconfig_serialize() {
         rpc_config,
         workload_config: WorkloadConfig {
             num_clients: 100,
+            start_index: 0,
             duration: 60,
             ramp_up_ms: 0,
             ramp_down_ms: 0,

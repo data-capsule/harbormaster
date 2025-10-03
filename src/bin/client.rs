@@ -54,7 +54,8 @@ async fn main() -> std::io::Result<()> {
         stat_worker.run().await;
     });
 
-    for id in 0..config.workload_config.num_clients {
+    for _id in 0..config.workload_config.num_clients {
+        let id = config.workload_config.start_index + _id;
         let config = config.clone();
         let keys = keys.clone();
         let _stat_tx = stat_tx.clone();

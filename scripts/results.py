@@ -47,7 +47,7 @@ client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: (
 storage_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total blocks stored: ([0-9]+) blocks or ([0-9.]+) MiB")
 
 
-psl_client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average benchmark latency: ([0-9]+) us Total benchmarked requests: ([0-9]+) Benchmark state: Running")
+psl_client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average benchmark latency: ([0-9]+) us Total benchmarked requests: ([0-9]+).*")
 
 def process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
     '''
@@ -768,7 +768,7 @@ class Result:
 
                 y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
                 # if y_range_total > 200:
-                plt.yscale("log")
+                # plt.yscale("log")
                 # plt.ylim((0, 125))
                 # plt.xlim((50, 550))
                 plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=legends_ncols, fontsize=70)
@@ -948,7 +948,7 @@ class Result:
         if num_requests == 0:
             return None, None
         mean_latency = latency_sum / num_requests
-        tput = num_requests / duration
+        tput = num_requests / (duration - ramp_up - ramp_down)
         return tput, mean_latency
 
     

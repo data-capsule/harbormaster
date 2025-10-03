@@ -230,6 +230,10 @@ const fn default_rate() -> f64 {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
+
+    #[serde(default = "default_start_index")]
+    pub start_index: usize,
+
     pub duration: u64,
 
     #[serde(default = "default_ramp_up_ms")]
@@ -244,6 +248,10 @@ pub struct WorkloadConfig {
     pub rate: f64, // in requests per second
 
     pub request_config: RequestConfig
+}
+
+const fn default_start_index() -> usize {
+    0
 }
 
 const fn default_ramp_up_ms() -> u64 {

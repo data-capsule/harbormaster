@@ -46,7 +46,7 @@ pub struct Auditor {
     gc_vcs: HashMap<String, VectorClock>,
     snapshot_store: SnapshotStore,
 
-    block_rx: Receiver<CachedBlock>,
+    block_rx: tokio::sync::mpsc::UnboundedReceiver<CachedBlock>,
     gc_rx: UnboundedReceiver<(String, VectorClock, Vec<(CacheKey, CachedValue)>)>,
     per_worker_min_gc_txs: Vec<UnboundedSender<VectorClock>>,
     gc_counter: usize,
@@ -61,7 +61,7 @@ pub struct Auditor {
 }
 
 impl Auditor {
-    pub fn new(config: AtomicConfig, block_rx: Receiver<CachedBlock>) -> Self {
+    pub fn new(config: AtomicConfig, block_rx: tokio::sync::mpsc::UnboundedReceiver<CachedBlock>) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
 
