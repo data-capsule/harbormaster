@@ -348,7 +348,7 @@ impl BlockSequencer {
                 if let Some(tx) = snapshot_propagated_signal_tx {
                     self.snapshot_propagated_signal_tx.push(tx);
                 }
-                // self.must_flush_before_next_other_write_op = true;
+                self.must_flush_before_next_other_write_op = true;
                 match seq_num_query {
                     BlockSeqNumQuery::DontBother => {}
                     BlockSeqNumQuery::WaitForSeqNum(sender) => {

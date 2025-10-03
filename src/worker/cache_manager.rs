@@ -758,14 +758,16 @@ impl CacheManager {
                 // Henceforth, all reads are based on this snapshot.
                 // Until the block sequencer proposes the new block. After that, the snapshot can be updated.
                 // let (current_vc_tx, current_vc_rx) = oneshot::channel();
-                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
-                    key: key.clone(),
-                    value: res.map(|v| v.clone()),
-                    snapshot_propagated_signal_tx,
-                    origin,
-                    seq_num_query,
-                    // current_vc: current_vc_tx,
-                }).await;
+                // let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
+                //     key: key.clone(),
+                //     value: res.map(|v| v.clone()),
+                //     snapshot_propagated_signal_tx,
+                //     origin,
+                //     seq_num_query,
+                //     // current_vc: current_vc_tx,
+                // }).await;
+                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: res.cloned().unwrap_or(CachedValue::new_dww(vec![], BigInt::from_bytes_be(Sign::Plus, &hash(&key)))), seq_num_query, /* current_vc: current_vc_tx */ }).await;
+
                 // let current_vc = current_vc_rx.await.unwrap();
 
                 // trace!("Read key: {}, value_hash: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), hex::encode(cached_value_to_val_hash(res.cloned())));
