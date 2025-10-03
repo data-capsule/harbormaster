@@ -433,7 +433,9 @@ impl PerWorkerAuditor {
     async fn verify_reads(&mut self, read_set: &ProtoReadSet, read_vc: &VectorClock, write_ops: &Vec<(CacheKey, CachedValue)>) {
         let mut local_cache = HashMap::new();
         let mut cached_upto = 0;
-        for ProtoReadSetEntry { key, value_hash, origin, after_write_op_index } in &read_set.entries {
+        // TODO: Do something with vc_delta before this!!!!
+        // Otherwise this is wrong!
+        for ProtoReadSetEntry { key, value_hash, origin, after_write_op_index, vc_delta } in &read_set.entries {
             while cached_upto < *after_write_op_index {
                 assert!(cached_upto < write_ops.len() as u64);
                 let (key, value) = write_ops[cached_upto as usize].clone();

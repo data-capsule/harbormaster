@@ -247,9 +247,12 @@ pub struct BlockSequencer {
     last_block_hash: FutureHash,
     self_write_op_bag: Vec<(CacheKey, CachedValue)>,
     all_write_op_bag: Vec<(CacheKey, CachedValue)>,
-    self_read_op_bag: Vec<(CacheKey, Option<CachedValue>, SenderType, usize)>,
+    self_read_op_bag: Vec<(CacheKey, Option<CachedValue>, SenderType, usize, VectorClock)>,
 
     curr_vector_clock: VectorClock,
+    block_start_vector_clock: VectorClock,
+    vc_delta: VectorClock,
+
     __vc_dirty: bool,
 
     cache_manager_rx: Receiver<SequencerCommand>,
@@ -291,6 +294,9 @@ impl BlockSequencer {
             all_write_op_bag: Vec::new(),
             self_read_op_bag: Vec::new(),
             curr_vector_clock: VectorClock::new(),
+            block_start_vector_clock: VectorClock::new(),
+            vc_delta: VectorClock::new(),
+
             cache_manager_rx,
             node_broadcaster_tx,
             storage_broadcaster_tx,
@@ -350,7 +356,7 @@ impl BlockSequencer {
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
             },
             SequencerCommand::SelfReadOp { key, value, origin, snapshot_propagated_signal_tx, seq_num_query, /* current_vc */ } => {
-                self.self_read_op_bag.push((key, value, origin, self.self_write_op_bag.len()));
+                self.self_read_op_bag.push((key, value, origin, self.self_write_op_bag.len(), self.vc_delta.clone()));
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
                 if let Some(tx) = snapshot_propagated_signal_tx {
                     self.snapshot_propagated_signal_tx.push(tx);
@@ -404,6 +410,7 @@ impl BlockSequencer {
                     }
 
                     // let set_dirty_condition = !self.is_quiscent || self.vc_wait_buffer.len() > 0;
+                    self.vc_delta.advance(sender.clone(), block_seq_num);
                     let _actually_advanced = self.curr_vector_clock.advance(sender, block_seq_num);
 
                     if _actually_advanced {
@@ -584,17 +591,17 @@ impl BlockSequencer {
 
         let origin = self.config.get().net_config.name.clone();
         let me = SenderType::Auth(origin.clone(), 0);
-        let read_vc = self.curr_vector_clock.clone();
+        let read_vc = self.block_start_vector_clock.clone();
         self.curr_vector_clock.advance(me.clone(), seq_num);
-        assert!(read_vc.get(&me) + 1 == seq_num);
+        // assert!(read_vc.get(&me) + 1 == seq_num);
 
         // self.all_write_op_bag.push((b"bleh".to_vec(), CachedValue::new_dww(b"bleh".to_vec(), BigInt::from(1))));
 
-        let root_hash = self.make_root_hash();
+        // let root_hash = self.make_root_hash();
 
         let self_reads = self.self_read_op_bag.drain(..).collect::<Vec<_>>();
-        let mut read_set = Self::prepare_read_set(self_reads);
-        read_set.push((b"root_hash".to_vec(), root_hash, origin.clone(), 0));
+        let read_set = Self::prepare_read_set(self_reads);
+        // read_set.push((b"root_hash".to_vec(), root_hash, origin.clone(), 0));
 
 
         let all_writes = Self::wrap_vec(
@@ -648,11 +655,14 @@ impl BlockSequencer {
         self.__vc_dirty = false;
 
         self.must_flush_before_next_other_write_op = false;
+
+        self.block_start_vector_clock = self.curr_vector_clock.clone();
+        self.vc_delta = VectorClock::new();
     }
 
     fn wrap_vec(
         writes: Vec<(CacheKey, CachedValue)>,
-        reads: Vec<(CacheKey, HashType, String, u64)>,
+        reads: Vec<(CacheKey, HashType, String, u64, VectorClock)>,
         seq_num: u64,
         vector_clock: Option<ProtoVectorClock>,
         origin: String,
@@ -694,11 +704,12 @@ impl BlockSequencer {
 
             read_set: Some(ProtoReadSet {
                 entries: reads.into_iter()
-                    .map(|(key, value_hash, origin, after_write_op_index)| ProtoReadSetEntry {
+                    .map(|(key, value_hash, origin, after_write_op_index, vc_delta)| ProtoReadSetEntry {
                         key,
                         value_hash,
                         origin,
                         after_write_op_index,
+                        vc_delta: Some(vc_delta.serialize()),
                     })
                     .collect(),
                 merkle_root: vec![],
@@ -779,14 +790,14 @@ impl BlockSequencer {
         // }
     }
 
-    fn prepare_read_set(reads: Vec<(CacheKey, Option<CachedValue>, SenderType, usize)>) -> Vec<(CacheKey, HashType, String, u64)> {
+    fn prepare_read_set(reads: Vec<(CacheKey, Option<CachedValue>, SenderType, usize, VectorClock)>) -> Vec<(CacheKey, HashType, String, u64, VectorClock)> {
         reads.into_iter()
-            .map(|(key, value, origin, after_write_op_index)| {
+            .map(|(key, value, origin, after_write_op_index, vc_delta)| {
                 let val_hash = cached_value_to_val_hash(value);
                 let origin = origin.to_name_and_sub_id().0;
-                (key, val_hash, origin, after_write_op_index as u64)
+                (key, val_hash, origin, after_write_op_index as u64, vc_delta)
             })
-            .sorted_by_key(|(_, _, _, after_write_op_index)| *after_write_op_index)
+            .sorted_by_key(|(_, _, _, after_write_op_index, _)| *after_write_op_index)
             .collect()
     }
 
