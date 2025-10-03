@@ -180,6 +180,10 @@ impl AbortableKVSTask {
                     atleast_one_write = true;
                     last_write_index = i;
                 },
+                ProtoTransactionOpType::Read => {
+                    atleast_one_write = true;
+                    last_write_index = i;
+                },
                 ProtoTransactionOpType::Increment => {
                     atleast_one_write = true;
                     last_write_index = i;
@@ -234,7 +238,8 @@ impl AbortableKVSTask {
                 },
                 ProtoTransactionOpType::Read => {
                     let key = op.operands[0].clone();
-                    match self.cache_connector.dispatch_read_request(key).await {
+                    let (res, block_seq_num_rx) = self.cache_connector.dispatch_read_request(key).await;
+                    match res {
                         std::result::Result::Ok((value, seq_num)) => {
                             results.push(ProtoTransactionOpResult {
                                 success: true,
@@ -248,6 +253,9 @@ impl AbortableKVSTask {
                             });
                         }
                     };
+                    if let Some(block_seq_num_rx) = block_seq_num_rx {
+                        block_seq_num_rx_vec.push(block_seq_num_rx);
+                    }
                 },
                 ProtoTransactionOpType::Increment => {
                     let key = op.operands[0].clone();
@@ -359,7 +367,12 @@ impl AbortableKVSTask {
 
 
     async fn checked_decrement(&mut self, key: CacheKey, value: f64, is_aborted: &mut bool, results: &mut Vec<ProtoTransactionOpResult>, block_seq_num_rx_vec: &mut FuturesUnordered<oneshot::Receiver<u64>>, locked_keys: &mut Vec<CacheKey>) -> bool /* success */{
-        let approx_curr_val = self.cache_connector.dispatch_counter_read_request(key.clone(), false).await;
+        let (approx_curr_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(key.clone(), false).await;
+        
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+
         let approx_curr_val = match approx_curr_val {
             std::result::Result::Ok(v) => v,
             std::result::Result::Err(crate::worker::cache_manager::CacheError::KeyNotFound) => {
@@ -389,7 +402,11 @@ impl AbortableKVSTask {
         let _ = self.cache_connector.dispatch_lock_request(&vec![(key.clone(), false)]).await;
         locked_keys.push(key.clone());
 
-        let curr_val = self.cache_connector.dispatch_counter_read_request(key.clone(), true).await;
+        let (curr_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(key.clone(), true).await;
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+        
         let curr_val = match curr_val {
             std::result::Result::Ok(v) => v,
             std::result::Result::Err(crate::worker::cache_manager::CacheError::KeyNotFound) => {
@@ -440,8 +457,14 @@ impl AbortableKVSTask {
         let checking_key = Self::get_checking_table_key(custid);
         let savings_key = Self::get_savings_table_key(custid);
 
-        let checking_val = self.cache_connector.dispatch_counter_read_request(checking_key.clone().into_bytes(), false).await;
-        let savings_val = self.cache_connector.dispatch_counter_read_request(savings_key.clone().into_bytes(), false).await;
+        let (checking_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(checking_key.clone().into_bytes(), false).await;
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+        let (savings_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(savings_key.clone().into_bytes(), false).await;
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
 
         let Ok(checking_val) = checking_val else {
             *is_aborted = true;
@@ -481,9 +504,18 @@ impl AbortableKVSTask {
         let dst_savings_key = Self::get_savings_table_key(custid2);
 
         // Zero out src_* and dst_savings.
-        let src_checking_val = self.cache_connector.dispatch_counter_read_request(src_checking_key.clone().into_bytes(), false).await;
-        let src_savings_val = self.cache_connector.dispatch_counter_read_request(src_savings_key.clone().into_bytes(), false).await;
-        let dst_savings_val = self.cache_connector.dispatch_counter_read_request(dst_savings_key.clone().into_bytes(), false).await;
+        let (src_checking_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(src_checking_key.clone().into_bytes(), false).await;
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+        let (src_savings_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(src_savings_key.clone().into_bytes(), false).await;
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+        let (dst_savings_val, block_seq_num_rx) = self.cache_connector.dispatch_counter_read_request(dst_savings_key.clone().into_bytes(), false).await;
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
 
         let Ok(src_checking_val) = src_checking_val else {
             *is_aborted = true;

@@ -56,10 +56,12 @@ impl CacheConnector {
     pub async fn dispatch_read_request(
         &self,
         key: Vec<u8>,
-    ) -> anyhow::Result<(Vec<u8>, u64), CacheError> {
+    ) -> (anyhow::Result<(Vec<u8>, u64), CacheError>, Option<tokio::sync::oneshot::Receiver<u64 /* block seq num */>>) {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let (seq_num_tx, seq_num_rx) = tokio::sync::oneshot::channel();
+        let seq_num_query = BlockSeqNumQuery::WaitForSeqNum(seq_num_tx);
         // let command = CacheCommand::Get(key.clone(), true, tx);
-        let command = CacheCommand::Get(key.clone(), false, tx);
+        let command = CacheCommand::Get(key.clone(), false, seq_num_query, tx);
 
         self.cache_tx.send(command).await.unwrap();
         let result = rx.await.unwrap();
@@ -68,36 +70,54 @@ impl CacheConnector {
         //     return Err(CacheError::TypeMismatch);
         // }
 
-        result.map(|v| {
+        (result.map(|v| {
             match v {
                 CachedValue::DWW(v) => (v.value, v.seq_num),
                 CachedValue::PNCounter(v) => (v.get_value().to_be_bytes().to_vec(), 0),
             }
-        })
+        }), Some(seq_num_rx))
+
+        // match result {
+        //     std::result::Result::Ok(v) => {
+        //         match v {
+        //             CachedValue::DWW(v) => {
+        //                 Ok((v.value, v.seq_num, Some(seq_num_rx)))
+        //             }
+        //             CachedValue::PNCounter(v) => {
+        //                 Ok((v.get_value().to_be_bytes().to_vec(), 0, Some(seq_num_rx)))
+        //             }
+        //         }
+        //     }
+        //     std::result::Result::Err(e) => {
+        //         Err((e, Some(seq_num_rx)))
+        //     }
+        // }
     }
 
     pub async fn dispatch_counter_read_request(
         &self,
         key: Vec<u8>,
         should_block_snapshot: bool,
-    ) -> anyhow::Result<f64, CacheError> {
+    ) -> (anyhow::Result<f64, CacheError>, Option<tokio::sync::oneshot::Receiver<u64 /* block seq num */>>) {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let command = CacheCommand::Get(key.clone(), should_block_snapshot, tx);
+        let (seq_num_tx, seq_num_rx) = tokio::sync::oneshot::channel();
+        let seq_num_query = BlockSeqNumQuery::WaitForSeqNum(seq_num_tx);
+        let command = CacheCommand::Get(key.clone(), should_block_snapshot, seq_num_query, tx);
 
         self.cache_tx.send(command).await.unwrap();
         let result = rx.await.unwrap();
 
         if let std::result::Result::Ok(CachedValue::DWW(_)) = &result {
-            return Err(CacheError::TypeMismatch);
+            return (Err(CacheError::TypeMismatch), Some(seq_num_rx));
         }
 
-        result.map(|v| {
+        (result.map(|v| {
             if let CachedValue::PNCounter(v) = v {
                 v.get_value()
             } else {
                 unreachable!()
             }
-        })
+        }), Some(seq_num_rx))
     }
 
     pub async fn dispatch_write_request(

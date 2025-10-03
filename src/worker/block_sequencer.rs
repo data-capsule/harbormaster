@@ -32,6 +32,7 @@ pub enum SequencerCommand {
         value: Option<CachedValue>, // Could be None if the key was not found.
         origin: SenderType,
         snapshot_propagated_signal_tx: Option<oneshot::Sender<()>>,
+        seq_num_query: BlockSeqNumQuery,
         // current_vc: oneshot::Sender<VectorClock>,
     },
 
@@ -341,13 +342,19 @@ impl BlockSequencer {
                 }
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
             },
-            SequencerCommand::SelfReadOp { key, value, origin, snapshot_propagated_signal_tx, /* current_vc */ } => {
+            SequencerCommand::SelfReadOp { key, value, origin, snapshot_propagated_signal_tx, seq_num_query, /* current_vc */ } => {
                 self.self_read_op_bag.push((key, value, origin, self.self_write_op_bag.len()));
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
                 if let Some(tx) = snapshot_propagated_signal_tx {
                     self.snapshot_propagated_signal_tx.push(tx);
                 }
                 self.must_flush_before_next_other_write_op = true;
+                match seq_num_query {
+                    BlockSeqNumQuery::DontBother => {}
+                    BlockSeqNumQuery::WaitForSeqNum(sender) => {
+                        sender.send(self.curr_block_seq_num).unwrap();
+                    }
+                }
             },
             SequencerCommand::OtherWriteOp { key, value, /* current_vc */ } => {
                 

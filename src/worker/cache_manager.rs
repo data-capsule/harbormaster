@@ -27,7 +27,7 @@ pub enum CacheError {
 
 #[derive(Debug)]
 pub enum CacheCommand {
-    Get(CacheKey /* Key */, bool /* block snapshot */, oneshot::Sender<Result<CachedValue, CacheError>>,),
+    Get(CacheKey /* Key */, bool /* block snapshot */, BlockSeqNumQuery, oneshot::Sender<Result<CachedValue, CacheError>>,),
     Put(
         CacheKey /* Key */,
         CachedValue /* Value */,
@@ -96,16 +96,18 @@ impl CacheConnector {
     pub async fn get(
         &self,
         key: Vec<u8>,
+        seq_num_query: BlockSeqNumQuery,
     ) -> anyhow::Result<CachedValue> {
-        let res = dispatch!(self, CacheCommand::Get, key, true);
+        let res = dispatch!(self, CacheCommand::Get, key, true, seq_num_query);
         Ok(res)
     }
 
     pub async fn get_nonblocking(
         &self,
         key: Vec<u8>,
+        seq_num_query: BlockSeqNumQuery,
     ) -> anyhow::Result<CachedValue> {
-        let res = dispatch!(self, CacheCommand::Get, key, false);
+        let res = dispatch!(self, CacheCommand::Get, key, false, seq_num_query);
         Ok(res)
     }
 
@@ -719,7 +721,7 @@ impl CacheManager {
 
     async fn _handle_command_single(&mut self, command: CacheCommand) {
         match command {
-            CacheCommand::Get(key, should_block_snapshot, response_tx) => {
+            CacheCommand::Get(key, should_block_snapshot, seq_num_query, response_tx) => {
                 let res = self.cache.get(&key);
 
                 #[cfg(feature = "evil")]
@@ -761,6 +763,7 @@ impl CacheManager {
                     value: res.map(|v| v.clone()),
                     snapshot_propagated_signal_tx,
                     origin,
+                    seq_num_query,
                     // current_vc: current_vc_tx,
                 }).await;
                 // let current_vc = current_vc_rx.await.unwrap();
