@@ -66,17 +66,19 @@ impl Auditor {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
 
-        let all_worker_names = _config.net_config.nodes.keys()
-            .filter(|name| name.starts_with("node"));
+        // let all_worker_names = _config.net_config.nodes.keys()
+        //     .filter(|name| name.starts_with("node"));
 
-        let gc_vcs = all_worker_names.clone().map(|name| (name.clone(), VectorClock::new())).collect();
+        let all_worker_names = _config.consensus_config.watchlist.clone();
+
+        let gc_vcs = all_worker_names.iter().map(|name| (name.clone(), VectorClock::new())).collect();
         let (gc_tx, gc_rx) = unbounded_channel();
 
         let mut per_worker_auditor_txs = Vec::new();
         let mut per_worker_min_gc_txs = Vec::new();
 
         let snapshot_store = SnapshotStore::new();
-        let per_worker_auditors = all_worker_names.clone().map(|name| {
+        let per_worker_auditors = all_worker_names.iter().map(|name| {
             let (tx, rx) = make_channel(_chan_depth);
             let (min_gc_tx, min_gc_rx) = unbounded_channel();
             per_worker_min_gc_txs.push(min_gc_tx);
@@ -88,7 +90,6 @@ impl Auditor {
                     gc_tx.clone(), min_gc_rx, snapshot_store.clone()
                 )
             ))
-                
         }).collect();
 
         let log_timer = ResettableTimer::new(Duration::from_millis(_config.app_config.logger_stats_report_ms));

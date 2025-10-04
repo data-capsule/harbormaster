@@ -170,6 +170,25 @@ sleep 60
         return ret
         # return {k: [] for k in worker_names}
 
+    def generate_watchlists(self, sequencer_names: List[str], worker_names: List[str]) -> Dict[str, List[str]]:
+        """
+        Generate a watchlist for each sequencer.
+        If there is only one sequencer, it gets the first 4 workers.
+        Otherwise, worker_names split evenly between the sequencers.
+        """
+        ret = defaultdict(list)
+        if len(sequencer_names) == 1:
+            ret[sequencer_names[0]] = worker_names[:4]
+            return dict(ret)
+
+        curr_sequencer_idx = 0
+        for worker_name in worker_names:
+            ret[sequencer_names[curr_sequencer_idx]].append(worker_name)
+            curr_sequencer_idx = (curr_sequencer_idx + 1) % len(sequencer_names)
+        return dict(ret)
+
+
+
 
     def generate_configs(self, deployment: Deployment, config_dir, log_dir):
         # If config_dir is not empty, assume the configs have already been generated
@@ -308,6 +327,7 @@ sleep 60
         print("Sequencer names", sequencer_names)
 
         gossip_downstream_worker_list = self.generate_multicast_tree(worker_names, 2)
+        sequencer_watchlist_map = self.generate_watchlists(sequencer_names, worker_names)
 
         print("Gossip downstream worker list", gossip_downstream_worker_list)
 
@@ -329,6 +349,9 @@ sleep 60
 
             # if True or k == storage_names[0]:
             v["consensus_config"]["learner_list"] = sequencer_names[:]
+
+            if k in sequencer_names:
+                v["consensus_config"]["watchlist"] = sequencer_watchlist_map.get(k, [])
 
             v["net_config"]["tls_cert_path"] = tls_cert_path
             v["net_config"]["tls_key_path"] = tls_key_path

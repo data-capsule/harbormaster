@@ -89,6 +89,13 @@ pub struct ConsensusConfig {
     pub max_gc_counter: usize, // Only used by the sequencer.
     #[serde(default = "default_max_gc_interval_ms")]
     pub max_gc_interval_ms: u64, // Only used by the sequencer.
+
+    #[serde(default = "default_watchlist")]
+    pub watchlist: Vec<String>,
+}
+
+const fn default_watchlist() -> Vec<String> {
+    vec![]
 }
 
 const fn default_max_gc_counter() -> usize {
@@ -299,6 +306,7 @@ impl WorkerConfig {
             max_audit_delay_ms: 10000000,
             max_gc_counter: 0,
             max_gc_interval_ms: 0,
+            watchlist: vec![],
         }
     }
 }
@@ -383,6 +391,7 @@ impl ClientConfig {
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
                 max_gc_counter: 0,
                 max_gc_interval_ms: 0,
+                watchlist: vec![],
             },
             app_config: AppConfig {
                 logger_stats_report_ms: 100,
