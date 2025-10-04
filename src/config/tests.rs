@@ -82,6 +82,7 @@ fn test_nodeconfig_serialize() {
         simulate_byzantine_behavior: true,
         byzantine_start_block: 20000,
         rollbacked_response_ratio: 0.0,
+        rolledback_response_count: 0,
     };
 
     let config = Config {
@@ -250,6 +251,7 @@ async fn test_atomic_config_access() {
         simulate_byzantine_behavior: true,
         byzantine_start_block: 20000,
         rollbacked_response_ratio: 0.0,
+        rolledback_response_count: 0,
     };
 
     let config = Config {

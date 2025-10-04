@@ -391,17 +391,20 @@ impl CacheManager {
 
         #[cfg(feature = "evil")]
         {
-            use rand::thread_rng;
+            use rand::rng;
 
             let config = &self.config.get().evil_config;
 
-            let should_respond_with_rolledback_state = if config.simulate_byzantine_behavior && config.rollbacked_response_ratio > 0.000000001 /* Avoid floating point errors */ {
-                self.__evil_weights[self.__evil_dist.sample(&mut thread_rng())].0
+            let should_respond_with_rolledback_state = if config.simulate_byzantine_behavior
+            && config.rollbacked_response_ratio > 0.000000001 /* Avoid floating point errors */ 
+            && self.__evil_count < config.rolledback_response_count
+            {
+                self.__evil_weights[self.__evil_dist.sample(&mut rng())].0
             } else {
                 false
             };
             if should_respond_with_rolledback_state {
-                trace!("😈 Responding with rolledback state for key: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)));
+                warn!("😈 Responding with rolledback state for key: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)));
                 return (None, true);
             }
             (res, false)

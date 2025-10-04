@@ -176,10 +176,17 @@ pub struct EvilConfig {
 
     #[serde(default = "default_rollbacked_response_ratio")]
     pub rollbacked_response_ratio: f64, // Used for PSL workers.
+
+    #[serde(default = "default_rolledback_response_count")]
+    pub rolledback_response_count: usize,
 }
 
 const fn default_rollbacked_response_ratio() -> f64 {
     0.0
+}
+
+const fn default_rolledback_response_count() -> usize {
+    0
 }
 
 
@@ -387,6 +394,7 @@ impl ClientConfig {
                 simulate_byzantine_behavior: false,
                 byzantine_start_block: 0,
                 rollbacked_response_ratio: 0.0,
+                rolledback_response_count: 0,
             }
         }
     }
