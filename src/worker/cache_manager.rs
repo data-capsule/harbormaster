@@ -4,6 +4,7 @@ use log::{error, info, trace, warn};
 use num_bigint::{BigInt, Sign};
 #[cfg(feature = "evil")]
 use rand::distr::{Distribution, weighted::WeightedIndex};
+use rand::Rng as _;
 use thiserror::Error;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot::{self, error::RecvError}, Mutex};
 use crate::{config::AtomicPSLWorkerConfig, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, AdvanceVCCommand, BlockSeqNumQuery, VectorClock}, TxWithAckChanTag}};
@@ -772,13 +773,29 @@ impl CacheManager {
 
                 //     Some(tx)
                 // };
+                let must_log_read = if did_rollback { true } else {
+                    rand::rng().random_bool(self.config.get().worker_config.disk_read_simulate_ratio)
+                };
 
-                match seq_num_query {
-                    BlockSeqNumQuery::WaitForSeqNum(tx) => {
-                        let _ = tx.send(0);
+
+                if !must_log_read {
+                    match seq_num_query {
+                        BlockSeqNumQuery::WaitForSeqNum(tx) => {
+                            let _ = tx.send(0);
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                } else {
+                    let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
+                        key: key.clone(),
+                        value: res.map(|v| v.clone()),
+                        snapshot_propagated_signal_tx: None,
+                        origin,
+                        seq_num_query,
+                        // current_vc: current_vc_tx,
+                    }).await;
                 }
+
 
 
                 // if should_block_snapshot == true:
@@ -786,14 +803,7 @@ impl CacheManager {
                 // Henceforth, all reads are based on this snapshot.
                 // Until the block sequencer proposes the new block. After that, the snapshot can be updated.
                 // let (current_vc_tx, current_vc_rx) = oneshot::channel();
-                // let _ = self.block_sequencer_tx.send(SequencerCommand::SelfReadOp { 
-                //     key: key.clone(),
-                //     value: res.map(|v| v.clone()),
-                //     snapshot_propagated_signal_tx,
-                //     origin,
-                //     seq_num_query,
-                //     // current_vc: current_vc_tx,
-                // }).await;
+                
                 // let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: key.clone(), value: res.cloned().unwrap_or(CachedValue::new_dww(vec![], BigInt::from_bytes_be(Sign::Plus, &hash(&key)))), seq_num_query, /* current_vc: current_vc_tx */ }).await;
 
                 // let current_vc = current_vc_rx.await.unwrap();
