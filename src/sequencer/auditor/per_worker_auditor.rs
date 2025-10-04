@@ -1,9 +1,9 @@
-use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet, VecDeque}, pin::Pin, sync::Arc, time::{Duration, Instant}};
 
 use log::{error, info, trace, warn};
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::{ProtoBlock, ProtoReadSet, ProtoReadSetEntry}, rpc::SenderType, sequencer::auditor::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, VectorClock}, cache_manager::process_tx_op}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::{ProtoBlock, ProtoReadSet, ProtoReadSetEntry, ProtoVectorClockEntry}, rpc::SenderType, sequencer::auditor::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, VectorClock}, cache_manager::process_tx_op}};
 use crate::utils::types::{CacheKey, CachedValue};
 
 
@@ -199,11 +199,39 @@ impl PerWorkerAuditor {
             // Let's yield to tokio here.
             tokio::task::yield_now().await;
 
-            let read_vc = &self.unaudited_buffer.front().unwrap().clone()
-                .block.vector_clock;
+            let block_ref = self.unaudited_buffer.front().unwrap();
+
+            let read_vc = &block_ref.block.vector_clock;
             let read_vc = VectorClock::from(read_vc.clone());
 
-            if read_vc <= self.available_vc {
+            let mut all_read_vcs = HashSet::new();
+            all_read_vcs.insert(read_vc.clone());
+
+            if let Some(read_set) = &block_ref.block.read_set {
+                for entry in &read_set.entries {
+                    let vc_delta = &entry.vc_delta;
+                    if vc_delta.is_none() {
+                        continue;
+                    }
+
+                    let mut _vc = read_vc.clone();
+
+                    let vc_delta = vc_delta.as_ref().unwrap();
+                    for ProtoVectorClockEntry { sender, seq_num } in vc_delta.entries.iter() {
+                        _vc.advance(SenderType::Auth(sender.clone(), 0), *seq_num);
+                    }
+                    all_read_vcs.insert(_vc);
+
+                }
+            }
+
+            if all_read_vcs.len() > 1 {
+                trace!("All read vcs: {:?}", all_read_vcs.len());
+            }
+
+            let can_audit = all_read_vcs.iter().all(|read_vc| read_vc <= &self.available_vc);
+
+            if can_audit {
                 let block = self.unaudited_buffer.pop_front().unwrap();
                 self.do_audit_block(block, read_vc).await;
                 audit_successful = true;

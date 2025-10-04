@@ -707,7 +707,7 @@ impl BlockSequencer {
                         key,
                         value_hash,
                         after_write_op_index,
-                        vc_delta: Some(vc_delta.serialize()),
+                        vc_delta: if vc_delta.len() > 0 { Some(vc_delta.serialize()) } else { None },
                     })
                     .collect(),
                 merkle_root: vec![],
