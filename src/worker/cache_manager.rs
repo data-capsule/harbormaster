@@ -392,7 +392,12 @@ impl CacheManager {
         //     max2_seq_num, String::from_utf8(max2_key.clone()).unwrap_or(hex::encode(max2_key))
         // );
 
-        info!("Read Cache size: {}", self.cache.len());
+        // info!("Read Cache size: {}", self.cache.len());
+
+        let stat_lines = self.cache.stats();
+        for line in stat_lines {
+            info!("{}", line);
+        }
 
         #[cfg(feature = "evil")]
         {

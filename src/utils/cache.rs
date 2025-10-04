@@ -68,12 +68,36 @@ impl Cache {
         self.read_cache.contains(key)
         || self.db.key_may_exist(key)
     }
+
+    pub fn stats(&self) -> Vec<String> {
+        let (max_seq_num, max2_seq_num, max_key, max2_key) = self.read_cache.iter()
+        .filter(|(_, val)| val.is_dww())
+        .fold((0u64, 0u64, CacheKey::new(), CacheKey::new()), |acc, (key, val)| {
+            let val = val.get_dww().unwrap();
+            if val.seq_num > acc.0 {
+                (val.seq_num, acc.0, key.clone(), acc.2)
+            } else if val.seq_num > acc.1 {
+                (acc.0, val.seq_num, acc.2, key.clone())
+            } else {
+                acc
+            }
+        });
+        vec![
+            format!("Read Cache size: {}, Max seq num: {} with Key: {}, Second max seq num: {} with Key: {}",
+                self.read_cache.len(),
+                max_seq_num, String::from_utf8(max_key.clone()).unwrap_or(hex::encode(max_key)),
+                max2_seq_num, String::from_utf8(max2_key.clone()).unwrap_or(hex::encode(max2_key))
+            ),
+
+            format!("RocksDB stats: {:?}", self.db.property_value("rocksdb.stats").unwrap().unwrap()),
+        ]
+    }
 }
 
 impl Drop for Cache {
     fn drop(&mut self) {
         let _ = self.db.flush();
-        let mut opts = Options::default();
+        let opts = Options::default();
 
         let _ = DB::destroy(&opts, "./node_db");
     }
