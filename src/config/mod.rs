@@ -120,16 +120,11 @@ pub struct WorkerConfig {
     #[serde(default = "default_nimble_endpoint_url")]
     pub nimble_endpoint_url: Option<String>,
 
-    #[serde(default = "default_disk_read_simulate_ratio")]
-    pub disk_read_simulate_ratio: f64,
+    pub state_storage_config: StorageConfig,
 }
 
 const fn default_heartbeat_max_delay_ms() -> u64 {
     200
-}
-
-const fn default_disk_read_simulate_ratio() -> f64 {
-    0.1
 }
 
 

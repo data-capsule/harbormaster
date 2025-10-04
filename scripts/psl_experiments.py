@@ -228,6 +228,7 @@ sleep 60
             config["net_config"]["addr"] = listen_addr
             data_dir = os.path.join(self.data_dir, f"{name}-db")
             config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
+            config["worker_config"]["state_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
 
             node_configs[name] = config
 
