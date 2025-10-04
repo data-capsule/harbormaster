@@ -4,7 +4,8 @@ use dashmap::DashMap;
 use log::{info, warn};
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::auditor::{per_worker_auditor::PerWorkerAuditor}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::{CacheKey, CachedValue}}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, rpc::SenderType, sequencer::auditor::{per_worker_auditor::PerWorkerAuditor}, utils::{channel::{make_channel, Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock}};
+use crate::utils::types::{CacheKey, CachedValue};
 
 mod per_worker_auditor;
 

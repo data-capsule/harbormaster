@@ -3297,6 +3297,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfe949189f46fabb938b3a9a0be30fdd93fd8a09260da863399a8cf3db756ec8"
+dependencies = [
+ "hashbrown 0.15.2",
+]
+
+[[package]]
 name = "lz4-sys"
 version = "1.11.1+lz4-1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4063,6 +4072,7 @@ dependencies = [
  "libloading",
  "log",
  "log4rs",
+ "lru",
  "lz4_flex",
  "memory-stats",
  "memorydb",

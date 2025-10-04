@@ -5,7 +5,8 @@ use itertools::Itertools;
 use log::{error, info, trace, warn};
 use tokio::sync::oneshot;
 
-use crate::{consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::Sender, worker::{app::{CacheConnector, ClientHandlerTask, UncommittedResultSet}, block_sequencer::VectorClock, cache_manager::{CacheCommand, CacheKey}, TxWithAckChanTag}};
+use crate::{consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::Sender, worker::{app::{CacheConnector, ClientHandlerTask, UncommittedResultSet}, block_sequencer::VectorClock, cache_manager::CacheCommand, TxWithAckChanTag}};
+use crate::utils::types::CacheKey;
 
 
 /// This is almost identical to KVSTask, but with subtle differences:

@@ -10,7 +10,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicPSLWorkerConfig, crypto::{default_hash, hash, CachedBlock, CryptoServiceConnector, FutureHash, HashType}, proto::{consensus::{ProtoBlock, ProtoHeartbeat, ProtoReadSet, ProtoReadSetEntry, ProtoVectorClock, ProtoVectorClockEntry}, execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase}, rpc::ProtoPayload}, rpc::{client::PinnedClient, PinnedMessage, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
 
-use super::cache_manager::{CacheKey, CachedValue};
+use crate::utils::types::{CacheKey, CachedValue};
 
 #[derive(Debug)]
 pub enum BlockSeqNumQuery {
@@ -36,7 +36,6 @@ pub enum SequencerCommand {
     SelfReadOp {
         key: CacheKey,
         value: Option<CachedValue>, // Could be None if the key was not found.
-        origin: SenderType,
         snapshot_propagated_signal_tx: Option<oneshot::Sender<()>>,
         seq_num_query: BlockSeqNumQuery,
         // current_vc: oneshot::Sender<VectorClock>,
@@ -247,7 +246,7 @@ pub struct BlockSequencer {
     last_block_hash: FutureHash,
     self_write_op_bag: Vec<(CacheKey, CachedValue)>,
     all_write_op_bag: Vec<(CacheKey, CachedValue)>,
-    self_read_op_bag: Vec<(CacheKey, Option<CachedValue>, SenderType, usize, VectorClock)>,
+    self_read_op_bag: Vec<(CacheKey, Option<CachedValue>, usize, VectorClock)>,
 
     curr_vector_clock: VectorClock,
     block_start_vector_clock: VectorClock,
@@ -355,8 +354,8 @@ impl BlockSequencer {
                 }
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
             },
-            SequencerCommand::SelfReadOp { key, value, origin, snapshot_propagated_signal_tx, seq_num_query, /* current_vc */ } => {
-                self.self_read_op_bag.push((key, value, origin, self.self_write_op_bag.len(), self.vc_delta.clone()));
+            SequencerCommand::SelfReadOp { key, value, snapshot_propagated_signal_tx, seq_num_query, /* current_vc */ } => {
+                self.self_read_op_bag.push((key, value, self.self_write_op_bag.len(), self.vc_delta.clone()));
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
                 if let Some(tx) = snapshot_propagated_signal_tx {
                     self.snapshot_propagated_signal_tx.push(tx);
@@ -662,7 +661,7 @@ impl BlockSequencer {
 
     fn wrap_vec(
         writes: Vec<(CacheKey, CachedValue)>,
-        reads: Vec<(CacheKey, HashType, String, u64, VectorClock)>,
+        reads: Vec<(CacheKey, HashType, u64, VectorClock)>,
         seq_num: u64,
         vector_clock: Option<ProtoVectorClock>,
         origin: String,
@@ -704,10 +703,9 @@ impl BlockSequencer {
 
             read_set: Some(ProtoReadSet {
                 entries: reads.into_iter()
-                    .map(|(key, value_hash, origin, after_write_op_index, vc_delta)| ProtoReadSetEntry {
+                    .map(|(key, value_hash, after_write_op_index, vc_delta)| ProtoReadSetEntry {
                         key,
                         value_hash,
-                        origin,
                         after_write_op_index,
                         vc_delta: Some(vc_delta.serialize()),
                     })
@@ -790,14 +788,13 @@ impl BlockSequencer {
         // }
     }
 
-    fn prepare_read_set(reads: Vec<(CacheKey, Option<CachedValue>, SenderType, usize, VectorClock)>) -> Vec<(CacheKey, HashType, String, u64, VectorClock)> {
+    fn prepare_read_set(reads: Vec<(CacheKey, Option<CachedValue>, usize, VectorClock)>) -> Vec<(CacheKey, HashType, u64, VectorClock)> {
         reads.into_iter()
-            .map(|(key, value, origin, after_write_op_index, vc_delta)| {
+            .map(|(key, value, after_write_op_index, vc_delta)| {
                 let val_hash = cached_value_to_val_hash(value);
-                let origin = origin.to_name_and_sub_id().0;
-                (key, val_hash, origin, after_write_op_index as u64, vc_delta)
+                (key, val_hash, after_write_op_index as u64, vc_delta)
             })
-            .sorted_by_key(|(_, _, _, after_write_op_index, _)| *after_write_op_index)
+            .sorted_by_key(|(_, _, after_write_op_index, _)| *after_write_op_index)
             .collect()
     }
 

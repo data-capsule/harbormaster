@@ -4,7 +4,8 @@ use log::{error, info, trace};
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 use prost::Message as _;
 
-use crate::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::{client::ProtoClientRequest, consensus::{ProtoHeartbeat, ProtoVectorClock}}, rpc::{server::MsgAckChan, SenderType}, sequencer::controller::ControllerCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock, cache_manager::CacheKey}};
+use crate::{config::AtomicConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::{client::ProtoClientRequest, consensus::{ProtoHeartbeat, ProtoVectorClock}}, rpc::{server::MsgAckChan, SenderType}, sequencer::controller::ControllerCommand, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}, worker::{block_sequencer::VectorClock}};
+use crate::utils::types::CacheKey;
 
 #[derive(Debug, Clone)]
 pub enum LockServerCommand {

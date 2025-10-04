@@ -64,6 +64,7 @@ dashmap = "6.1.0"
 rand_distr = "0.5.1"
 eth_trie = "0.6.1"
 memorydb = "0.3.0"
+lru = "0.16.1"
 
 [build-dependencies]
 prost-build = { version = "0.14.1" }

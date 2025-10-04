@@ -47,6 +47,7 @@ signature_max_delay_blocks = 50
 num_crypto_workers = 5
 num_worker_threads_per_worker = 8
 num_replier_threads_per_worker = 8
+disk_read_simulate_ratio = 0.999999
 
 
 [node_config.app_config]

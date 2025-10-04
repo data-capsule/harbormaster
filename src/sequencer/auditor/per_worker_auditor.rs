@@ -3,7 +3,8 @@ use std::{collections::{HashMap, VecDeque}, pin::Pin, sync::Arc, time::{Duration
 use log::{error, info, trace, warn};
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Mutex};
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::{ProtoBlock, ProtoReadSet, ProtoReadSetEntry}, rpc::SenderType, sequencer::auditor::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, VectorClock}, cache_manager::{process_tx_op, CacheKey, CachedValue}}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::{ProtoBlock, ProtoReadSet, ProtoReadSetEntry}, rpc::SenderType, sequencer::auditor::SnapshotStore, utils::{channel::Receiver, timer::ResettableTimer}, worker::{block_sequencer::{cached_value_to_val_hash, VectorClock}, cache_manager::process_tx_op}};
+use crate::utils::types::{CacheKey, CachedValue};
 
 
 #[allow(dead_code)]
@@ -435,7 +436,7 @@ impl PerWorkerAuditor {
         let mut cached_upto = 0;
         // TODO: Do something with vc_delta before this!!!!
         // Otherwise this is wrong!
-        for ProtoReadSetEntry { key, value_hash, origin, after_write_op_index, vc_delta } in &read_set.entries {
+        for ProtoReadSetEntry { key, value_hash, after_write_op_index, vc_delta } in &read_set.entries {
             while cached_upto < *after_write_op_index {
                 assert!(cached_upto < write_ops.len() as u64);
                 let (key, value) = write_ops[cached_upto as usize].clone();
@@ -493,8 +494,8 @@ impl PerWorkerAuditor {
                 let correct_value_hex_str = &hex::encode(correct_value_hash);
                 let value_hex_str = &hex::encode(value_hash);
 
-                trace!("❌ Read verification failed in {} for key: {} correct_value_hash: {} value_hash: {} read_vc: {} Value origin: {}",
-                    self.worker_name, key_str, correct_value_hex_str, value_hex_str, read_vc, origin);
+                trace!("❌ Read verification failed in {} for key: {} correct_value_hash: {} value_hash: {} read_vc: {}",
+                    self.worker_name, key_str, correct_value_hex_str, value_hex_str, read_vc);
 
 
                 self.num_incorrect_reads += 1;
