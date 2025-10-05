@@ -53,7 +53,7 @@ impl Cache {
 
     pub fn put(&mut self, key: CacheKey, value: CachedValue) {
         let mut wopts = WriteOptions::default();
-        wopts.disable_wal(false);
+        wopts.disable_wal(true);
 
         let ser = bincode::serialize(&value).unwrap();
         self.db.put_opt(key.clone(), ser, &wopts).unwrap();
