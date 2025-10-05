@@ -173,25 +173,26 @@ impl BlockBroadcaster {
             let threshold = self.get_success_threshold();
 
             
-            if peers.len() > 0 {
-                let mut blocks_to_broadcast = Vec::new();
+            let mut blocks_to_broadcast = Vec::new();
 
-                for (n, block) in self.block_buffer.iter() {
-                    if !block.block.origin.contains("god") {
-                        // God blocks are always delivered.
-                        if self.wait_for_signal {
-                            if *n > self.deliver_index {
-                                continue;
-                            }
+            for (n, block) in self.block_buffer.iter() {
+                if !block.block.origin.contains("god") {
+                    // God blocks are always delivered.
+                    if self.wait_for_signal {
+                        if *n > self.deliver_index {
+                            continue;
                         }
                     }
-    
-                    // let ae = self.wrap_block_for_broadcast(block);
-                    blocks_to_broadcast.push(block.clone());
-                    if self.forward_to_staging {
-                        let _ = self.staging_tx.as_ref().unwrap().send(block.clone()).await;
-                    }
                 }
+
+                // let ae = self.wrap_block_for_broadcast(block);
+                blocks_to_broadcast.push(block.clone());
+                if self.forward_to_staging {
+                    let _ = self.staging_tx.as_ref().unwrap().send(block.clone()).await;
+                }
+            }
+
+            if peers.len() > 0 {
 
                 if blocks_to_broadcast.len() > 0 {
 

@@ -85,27 +85,28 @@ linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
-read_ratio = 1.0
+read_ratio = 0.5
 
-[[experiments]]
-name = "ycsb_r50_w16_psl"
-type = "psl_storage"
-# git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
-repeats = 1
-# num_clients = 500
-num_nodes = 16
-num_storage_nodes = 3
-num_sequencer_nodes = 1
-node_distribution = "tag:worker"
-storage_distribution = "uniform"
-sequencer_distribution = "tag:sequencer"
-build_command = "make"
-duration = 300
-data_dir = "/data/"
+# [[experiments]]
+# name = "ycsb_r50_w16_psl"
+# type = "psl_storage"
+# # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
+# repeats = 1
+# # num_clients = 500
+# num_nodes = 16
+# num_storage_nodes = 3
+# num_sequencer_nodes = 1
+# node_distribution = "tag:worker"
+# storage_distribution = "uniform"
+# sequencer_distribution = "tag:sequencer"
+# build_command = "make"
+# duration = 60
+# data_dir = "/data/"
 
-[experiments.sweeping_parameters]
-# num_clients = [1, 16, 64, 160, 240, 320, 480, 640, 960, 1280]
-num_clients = [1024]
+# [experiments.sweeping_parameters]
+# # num_clients = [1, 16, 64, 160, 240, 320, 480, 640, 960, 1280]
+# # num_clients = [100]
+# num_clients = [1, 4, 8, 16, 32, 48, 96, 128, 256]
 
 
 # [[experiments]]
@@ -121,15 +122,34 @@ num_clients = [1024]
 # storage_distribution = "uniform"
 # sequencer_distribution = "uniform"
 # build_command = "make nimble"
-# duration = 30
+# duration = 60
 # data_dir = "/data/"
 
 # [experiments.sweeping_parameters]
 # # num_clients = [1, 16, 64, 96, 128, 160, 240, 320, 480]
 # # num_clients = [1, 4, 8, 16, 32, 48, 96, 128]
 # # num_clients = [1, 16, 128]
-# num_clients = [1, 16, 64, 160, 240, 320]
+# num_clients = [1, 4, 8, 16, 32, 48, 96, 128, 256]
 
+[[experiments]]
+name = "ycsb_r50_w16_unprotected"
+type = "psl_storage"
+# git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
+repeats = 1
+# num_clients = 500
+num_nodes = 16
+num_storage_nodes = 0
+num_sequencer_nodes = 1
+node_distribution = "tag:worker"
+storage_distribution = "uniform"
+sequencer_distribution = "uniform"
+build_command = "make"
+duration = 60
+data_dir = "/data/"
+
+[experiments.sweeping_parameters]
+num_clients = [20]
+# num_clients = [1, 4, 8, 16, 32, 48, 96, 128, 256]
 
 
 [[results]]
@@ -143,3 +163,4 @@ force_parse = true
 [results.legends]
 ycsb_r50_w16_psl = "psl"
 ycsb_r50_w16_nimble = "nimble"
+ycsb_r50_w16_unprotected = "unprotected"

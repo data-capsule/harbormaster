@@ -214,6 +214,7 @@ impl Staging {
                 .map(|(sender, _)| sender.clone())
                 .collect::<HashSet<_>>();
 
+
             if vote_set.len() >= self.get_commit_threshold() {
                 new_ci = block.block.n;
             }
