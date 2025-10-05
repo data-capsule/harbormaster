@@ -92,32 +92,32 @@ impl Cache {
     pub fn new(cache_size: usize, config: RocksDBConfig) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(1000);
 
-        // std::thread::spawn(move || {
-        //     Self::db_worker(rx, config);    
-        // });
+        std::thread::spawn(move || {
+            Self::db_worker(rx, config);    
+        });
 
         Self { read_cache: LruCache::new(std::num::NonZero::new(cache_size).unwrap()), persistent_tx: tx }
     }
 
     async fn db_get(&mut self, key: &CacheKey) -> Option<CachedValue> {
-        None
-        // let (tx, rx) = tokio::sync::oneshot::channel();
-        // self.persistent_tx.send(PersistentCommand::Get(key.clone(), tx)).await.unwrap();
-        // let val = rx.await.unwrap();
-        // val.map(|v| v)
+        // None
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.persistent_tx.send(PersistentCommand::Get(key.clone(), tx)).await.unwrap();
+        let val = rx.await.unwrap();
+        val.map(|v| v)
     }
 
     async fn db_put(&mut self, key: CacheKey, value: CachedValue) {
-        // let (tx, rx) = tokio::sync::oneshot::channel();
-        // self.persistent_tx.send(PersistentCommand::Put(key.clone(), value.clone(), tx)).await.unwrap();
-        // rx.await.unwrap()
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.persistent_tx.send(PersistentCommand::Put(key.clone(), value.clone(), tx)).await.unwrap();
+        rx.await.unwrap()
     }
 
     async fn db_contains_key(&self, key: &CacheKey) -> bool {
-        false
-        // let (tx, rx) = tokio::sync::oneshot::channel();
-        // self.persistent_tx.send(PersistentCommand::ContainsKey(key.clone(), tx)).await.unwrap();
-        // rx.await.unwrap()
+        // false
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.persistent_tx.send(PersistentCommand::ContainsKey(key.clone(), tx)).await.unwrap();
+        rx.await.unwrap()
     }
 
     pub async fn get(&mut self, key: &CacheKey) -> (Option<CachedValue>, bool /* read from cache */) {
