@@ -28,81 +28,73 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new(cache_size: usize, config: RocksDBConfig) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
+    fn db_worker(mut rx: tokio::sync::mpsc::Receiver<PersistentCommand>, config: RocksDBConfig) {
+        let mut opts = rocksdb::Options::default();
+        opts.create_if_missing(true);
+        opts.set_write_buffer_size(config.write_buffer_size);
+        opts.set_max_write_buffer_number(config.max_write_buffer_number);
+        opts.set_min_write_buffer_number_to_merge(config.max_write_buffers_to_merge);
+        opts.set_target_file_size_base(config.write_buffer_size as u64);
 
-        std::thread::spawn(move || {
-            // let fjall_config = fjall::Config::new(config.db_path.clone())
-            //     .cache_size(config.write_buffer_size as u64)
-            //     .compaction_workers(1)
-            //     .flush_workers(1);
-    
-            // let keyspace = fjall_config.open().unwrap();
-            // let db = keyspace.open_partition("default", PartitionCreateOptions::default()).unwrap();
-        
-            let mut opts = rocksdb::Options::default();
-            opts.create_if_missing(true);
-            opts.set_write_buffer_size(config.write_buffer_size);
-            opts.set_max_write_buffer_number(config.max_write_buffer_number);
-            opts.set_min_write_buffer_number_to_merge(config.max_write_buffers_to_merge);
-            opts.set_target_file_size_base(config.write_buffer_size as u64);
+        opts.set_manual_wal_flush(true);
+        opts.set_compaction_style(DBCompactionStyle::Universal);
+        opts.set_allow_mmap_reads(true);
+        opts.set_allow_mmap_writes(true);
 
-            opts.set_manual_wal_flush(true);
-            opts.set_compaction_style(DBCompactionStyle::Universal);
-            opts.set_allow_mmap_reads(true);
-            opts.set_allow_mmap_writes(true);
+        let db = rocksdb::DB::open(&opts, config.db_path.clone()).unwrap();
 
-            let db = rocksdb::DB::open(&opts, config.db_path.clone()).unwrap();
-
-            // opts.increase_parallelism(3);
-            while let Some(cmd) = rx.blocking_recv() {
-                match cmd {
-                    PersistentCommand::Put(key, value, resp_tx) => {
-                        let ser = bincode::serialize(&value).unwrap();
-                        db.put(key.clone(), ser).unwrap();
-                        resp_tx.send(()).unwrap();
-                    }
-                    PersistentCommand::Get(key, resp_tx) => {
-                        let val = db.get_pinned(key.clone()).unwrap();
-                        match val {
-                            Some(val) => {
-                                let val: CachedValue = bincode::deserialize(&val).unwrap();
-                                resp_tx.send(Some(val)).unwrap();
-                            }
-                            None => {
-                                resp_tx.send(None).unwrap();
-                            }
+        // opts.increase_parallelism(3);
+        while let Some(cmd) = rx.blocking_recv() {
+            match cmd {
+                PersistentCommand::Put(key, value, resp_tx) => {
+                    let ser = bincode::serialize(&value).unwrap();
+                    db.put(key.clone(), ser).unwrap();
+                    resp_tx.send(()).unwrap();
+                }
+                PersistentCommand::Get(key, resp_tx) => {
+                    let val = db.get_pinned(key.clone()).unwrap();
+                    match val {
+                        Some(val) => {
+                            let val: CachedValue = bincode::deserialize(&val).unwrap();
+                            resp_tx.send(Some(val)).unwrap();
                         }
-                    }
-                    PersistentCommand::ContainsKey(key, resp_tx) => {
-                        // let val = db.contains_key(key.clone()).unwrap();
-                        if !db.key_may_exist(&key) {
-                            resp_tx.send(false).unwrap();
-                            continue;
+                        None => {
+                            resp_tx.send(None).unwrap();
                         }
-                        let val = db.get_pinned(&key).unwrap();
-                        if val.is_none() {
-                            resp_tx.send(false).unwrap();
-                            continue;
-                        }
-                        resp_tx.send(true).unwrap();
-                    }
-                    PersistentCommand::Stats(resp_tx) => {
-                        let stats = vec![];
-                        resp_tx.send(stats).unwrap();
-                    }
-                    PersistentCommand::Drop(resp_tx) => {
-                        resp_tx.send(());
-                        return;
                     }
                 }
+                PersistentCommand::ContainsKey(key, resp_tx) => {
+                    // let val = db.contains_key(key.clone()).unwrap();
+                    if !db.key_may_exist(&key) {
+                        resp_tx.send(false).unwrap();
+                        continue;
+                    }
+                    let val = db.get_pinned(&key).unwrap();
+                    if val.is_none() {
+                        resp_tx.send(false).unwrap();
+                        continue;
+                    }
+                    resp_tx.send(true).unwrap();
+                }
+                PersistentCommand::Stats(resp_tx) => {
+                    let stats = vec![];
+                    resp_tx.send(stats).unwrap();
+                }
+                PersistentCommand::Drop(resp_tx) => {
+                    resp_tx.send(());
+                    return;
+                }
             }
-        
-        });
+        }
+    }
 
-        // let path = config.db_path.clone();
 
-        // let db = DB::open(&opts, path).unwrap();
+    pub fn new(cache_size: usize, config: RocksDBConfig) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+
+        // std::thread::spawn(move || {
+        //     Self::db_worker(rx, config);    
+        // });
 
         Self { read_cache: LruCache::new(std::num::NonZero::new(cache_size).unwrap()), persistent_tx: tx }
     }
