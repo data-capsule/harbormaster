@@ -53,7 +53,7 @@ impl Cache {
 
     pub fn put(&mut self, key: CacheKey, value: CachedValue) {
         let mut wopts = WriteOptions::default();
-        wopts.disable_wal(true);
+        wopts.disable_wal(false);
 
         let ser = bincode::serialize(&value).unwrap();
         self.db.put_opt(key.clone(), ser, &wopts).unwrap();
@@ -64,9 +64,17 @@ impl Cache {
         self.read_cache.len()
     }
 
+    /// Has to be 100% accurate.
     pub fn contains_key(&self, key: &CacheKey) -> bool {
-        self.read_cache.contains(key)
-        || self.db.key_may_exist(key)
+        if self.read_cache.contains(key) {
+            return true;
+        }
+
+        if !self.db.key_may_exist(key) {
+            return false;
+        }
+
+        self.db.get(key).is_ok()
     }
 
     pub fn stats(&self) -> Vec<String> {

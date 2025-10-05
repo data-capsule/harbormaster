@@ -37,9 +37,9 @@ max_write_buffer_number = 1
 max_write_buffers_to_merge = 1
 
 [node_config.worker_config.state_storage_config.RocksDB]
-write_buffer_size = 2147483648
-max_write_buffer_number = 1
-max_write_buffers_to_merge = 1
+write_buffer_size = 67_108_864 # 64MB
+max_write_buffer_number = 8
+max_write_buffers_to_merge = 2
 
 [node_config.worker_config]
 all_writes_max_batch_size = 1000
