@@ -375,9 +375,7 @@ impl CacheConnector {
                 continue;
             };
 
-            let barrier_val = barrier_val as usize;
-
-            if barrier_val == barrier_max_count {
+            if (barrier_val - barrier_max_count as f64).abs() < 0.000001 {
                 break;
             }
         }
