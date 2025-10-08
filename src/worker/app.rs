@@ -357,6 +357,31 @@ impl CacheConnector {
         }
 
     }
+
+
+    /// Each barrier is once-use only.
+    /// Use a unique id for each barrier.
+    /// barrier_max_count is the total number of workers that must reach the barrier.
+    pub async fn dispatch_barrier_request(&mut self, barrier_id: usize, barrier_max_count: usize) {
+        let barrier_key = format!("barrier_{}", barrier_id).as_bytes().to_vec();
+        let _ = self.dispatch_increment_request(barrier_key.clone(), 1.0).await;
+        self.dispatch_commit_request(false).await;
+
+
+        loop {
+            tokio::task::yield_now().await;
+            let barrier_val = self.dispatch_counter_read_request(barrier_key.clone(), false).await;
+            let (std::result::Result::Ok(barrier_val), _) = barrier_val else {
+                continue;
+            };
+
+            let barrier_val = barrier_val as usize;
+
+            if barrier_val == barrier_max_count {
+                break;
+            }
+        }
+    }
 }
 
 pub type UncommittedResultSet = (Vec<ProtoTransactionOpResult>, MsgAckChanWithTag, Option<u64> /* Some(potential seq_num; wait till committed) | None(reply immediately) */);
