@@ -6,8 +6,8 @@ use futures::{stream::FuturesUnordered, StreamExt as _};
 use itertools::Itertools;
 use log::{error, trace};
 
-use crate::{config::AtomicPSLWorkerConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::Sender, worker::{app::{CacheConnector, ClientHandlerTask, UncommittedResultSet}, block_sequencer::VectorClock, cache_manager::{CacheCommand, CacheKey}, TxWithAckChanTag}};
-
+use crate::{config::AtomicPSLWorkerConfig, consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::Sender, worker::{app::{CacheConnector, ClientHandlerTask, UncommittedResultSet}, block_sequencer::VectorClock, cache_manager::CacheCommand, TxWithAckChanTag}};
+use crate::utils::types::CacheKey;
 
 pub struct SLIDETask {
     cache_connector: CacheConnector,

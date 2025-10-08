@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use psl::{client::{logger::ClientStatLogger, worker::ClientWorker, workload_generators::{BlankAEWorkloadGenerator, BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, SmallbankGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::Client, utils::channel::make_channel};
+use psl::{client::{logger::ClientStatLogger, worker::ClientWorker, workload_generators::{BlankAEWorkloadGenerator, BlankWorkloadGenerator, KVReadWriteUniformGenerator, KVReadWriteYCSBGenerator, MockSQLGenerator, SmallbankGenerator, MLTrainingWorkloadGenerator}}, config::{default_log4rs_config, ClientConfig, RequestConfig}, crypto::KeyStore, rpc::client::Client, utils::channel::make_channel};
 use tokio::task::JoinSet;
 
 #[global_allocator]
