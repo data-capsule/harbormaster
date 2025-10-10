@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use dashmap::DashMap;
 use lru::LruCache;
 use serde::Serialize;
 
@@ -10,6 +11,7 @@ use rocksdb::{DBCompactionStyle, Options, WriteBatchWithTransaction, WriteOption
 pub struct Cache {
     read_cache: LruCache<CacheKey, CachedValue>,
     db: DB,
+    alt_db: HashMap<CacheKey, CachedValue>,
     db_path: String,
 }
 
@@ -38,7 +40,7 @@ impl Cache {
             let path = config.db_path.clone();
             let db = DB::open(&opts, path).unwrap();
 
-        Self { read_cache: LruCache::new(std::num::NonZero::new(cache_size).unwrap()), db, db_path: config.db_path }
+        Self { read_cache: LruCache::new(std::num::NonZero::new(cache_size).unwrap()), db, alt_db: HashMap::new(), db_path: config.db_path }
     }
 
     pub fn get(&mut self, key: &CacheKey) -> (Option<CachedValue>, bool /* read from cache */) {
@@ -47,14 +49,17 @@ impl Cache {
             return (val.cloned(), true);
         }
 
-        let val = self.db.get_pinned(key.clone()).unwrap();
+        // let val = self.db.get_pinned(key.clone()).unwrap();
+        let val = self.alt_db.get(key);
 
         if val.is_none() {
             return (None, false);
         }
 
-        let val: CachedValue = bincode::deserialize(&val.unwrap()).unwrap();
-        self.read_cache.put(key.clone(), val.clone());
+        // let val: CachedValue = bincode::deserialize(&val.unwrap()).unwrap();
+        let val = val.unwrap().clone();
+        // self.read_cache.put(key.clone(), val.clone());
+        self.alt_db.insert(key.clone(), val.clone());
         (Some(val), false)
     }
 
@@ -63,8 +68,9 @@ impl Cache {
         wopts.disable_wal(true);
         // wopts.set_sync(sync);
 
-        let ser = bincode::serialize(&value).unwrap();
-        self.db.put_opt(key.clone(), ser, &wopts).unwrap();
+        // let ser = bincode::serialize(&value).unwrap();
+        // self.db.put_opt(key.clone(), ser, &wopts).unwrap();
+        self.alt_db.insert(key.clone(), value.clone());
         self.read_cache.put(key, value);
     }
 
@@ -77,11 +83,12 @@ impl Cache {
             return true;
         }
 
-        if !self.db.key_may_exist(key) {
-            return false;
-        }
+        // if !self.db.key_may_exist(key) {
+        //     return false;
+        // }
 
-        self.db.get_pinned(key).unwrap().is_some()
+        // self.db.get_pinned(key).unwrap().is_some()
+        self.alt_db.contains_key(key)
     }
 
     pub fn stats(&self) -> Vec<String> {
