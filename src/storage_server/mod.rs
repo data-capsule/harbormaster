@@ -110,8 +110,8 @@ pub struct StorageNode {
     keystore: AtomicKeyStore,
 
     server: Arc<Server<PinnedStorageServerContext>>,
-    // storage: Arc<Mutex<StorageService<RocksDBStorageEngine>>>,
-    storage: Arc<Mutex<StorageService<InMemoryStorageEngine>>>,
+    storage: Arc<Mutex<StorageService<RocksDBStorageEngine>>>,
+    // storage: Arc<Mutex<StorageService<InMemoryStorageEngine>>>,
     crypto: CryptoService,
 
     fork_receiver: Arc<Mutex<ForkReceiver>>,
@@ -151,8 +151,8 @@ impl StorageNode {
         let storage_config = &config.get().consensus_config.log_storage_config;
         let storage = match storage_config {
             rocksdb_config @ crate::config::StorageConfig::RocksDB(_) => {
-                // let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
-                let _db = InMemoryStorageEngine::new();
+                let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
+                // let _db = InMemoryStorageEngine::new();
                 StorageService::new(config.clone(), _db, _chan_depth)
             },
             _ => {
