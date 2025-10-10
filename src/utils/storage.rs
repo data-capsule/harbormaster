@@ -24,14 +24,31 @@ impl RocksDBStorageEngine {
     pub fn new(config: StorageConfig) -> RocksDBStorageEngine {
         if let StorageConfig::RocksDB(config) = config {
             let mut opts = Options::default();
+            // opts.create_if_missing(true);
+            // opts.set_write_buffer_size(config.write_buffer_size);
+            // opts.set_max_write_buffer_number(config.max_write_buffer_number);
+            // opts.set_min_write_buffer_number_to_merge(config.max_write_buffers_to_merge);
+            // opts.set_target_file_size_base(config.write_buffer_size as u64);
+
+            // opts.set_manual_wal_flush(true);
+            // opts.set_compaction_style(DBCompactionStyle::Universal);
+            // opts.set_allow_mmap_reads(true);
+            // opts.set_allow_mmap_writes(true);
+
             opts.create_if_missing(true);
             opts.set_write_buffer_size(config.write_buffer_size);
             opts.set_max_write_buffer_number(config.max_write_buffer_number);
             opts.set_min_write_buffer_number_to_merge(config.max_write_buffers_to_merge);
             opts.set_target_file_size_base(config.write_buffer_size as u64);
+            opts.set_level_zero_file_num_compaction_trigger(10);
+            opts.set_level_zero_slowdown_writes_trigger(20);
+            opts.set_level_zero_stop_writes_trigger(40);
+            opts.set_max_bytes_for_level_base(8 * config.write_buffer_size as u64);
+            opts.set_max_background_jobs(1);
+            opts.set_memtable_prefix_bloom_ratio(0.125);
 
             opts.set_manual_wal_flush(true);
-            opts.set_compaction_style(DBCompactionStyle::Universal);
+            opts.set_compaction_style(DBCompactionStyle::Level);
             opts.set_allow_mmap_reads(true);
             opts.set_allow_mmap_writes(true);
 
