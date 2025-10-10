@@ -102,6 +102,9 @@ impl Cache {
         let rocksdb_stat_lines = rocksdb_stats.split('\n').collect::<Vec<&str>>();
         let _n = rocksdb_stat_lines.len();
         let rocksdb_stats = rocksdb_stat_lines[_n-10..].join("\n");
+
+        let dir_size = fs_extra::dir::get_size(&self.db_path).unwrap_or_default();
+        
         vec![
             format!("Read Cache size: {}, Max seq num: {} with Key: {}, Second max seq num: {} with Key: {}",
                 self.read_cache.len(),
@@ -110,6 +113,8 @@ impl Cache {
             ),
 
             format!("RocksDB stats: {}", rocksdb_stats),
+
+            format!("RocksDB directory size: {} MiB", (dir_size as f64) / (1024.0 * 1024.0)),
         ]
     }
 }

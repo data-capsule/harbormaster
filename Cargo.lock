@@ -4177,6 +4177,7 @@ dependencies = [
  "ed25519-dalek",
  "eth_trie",
  "fjall",
+ "fs_extra",
  "futures",
  "gluesql",
  "hashbrown 0.15.2",
