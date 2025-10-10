@@ -1,3 +1,5 @@
+use dashmap::DashMap;
+use hashbrown::HashMap;
 use rocksdb::{DBCompactionStyle, Options, WriteBatchWithTransaction, WriteOptions, DB};
 
 use crate::config::{AtomicConfig, RocksDBConfig, StorageConfig};
@@ -215,5 +217,49 @@ impl StorageEngine for RemoteStorageEngine {
     fn get_block(&self, _block_hash: &Vec<u8>) -> Result<Vec<u8>, Error> {
         // TODO: Implement this
         Err(Error::new(ErrorKind::InvalidInput, "Key not found"))
+    }
+}
+
+#[derive(Debug)]
+pub struct InMemoryStorageEngine {
+    db: DashMap<Vec<u8>, Vec<u8>>,
+}
+
+impl InMemoryStorageEngine {
+    pub fn new() -> Self {
+        Self { db: DashMap::new() }
+    }
+}
+
+impl StorageEngine for InMemoryStorageEngine {
+    fn init(&mut self) {
+        // This does nothing for InMemoryStorageEngine, since it is already created when new() is called.
+    }
+
+    fn destroy(&self) {
+        // This does nothing for InMemoryStorageEngine, since it is already created when new() is called.
+    }
+
+    fn id(&self) -> String {
+        "inmemory".to_string()
+    }
+
+    fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error> {
+        self.db.insert(block_hash.clone(), block_ser.clone());
+        Ok(())
+    }
+
+    fn put_multiple_blocks(&self, blocks: &Vec<(Vec<u8> /* block_ser */, Vec<u8> /* block_hash */)>) -> Result<(), Error> {
+        for (block_ser, block_hash) in blocks {
+            self.db.insert(block_hash.clone(), block_ser.clone());
+        }
+        Ok(())
+    }
+    
+    fn get_block(&self, block_hash: &Vec<u8>) -> Result<Vec<u8>, Error> {
+        match self.db.get(block_hash) {
+            Some(block_ser) => Ok(block_ser.clone()),
+            None => Err(Error::new(ErrorKind::InvalidInput, "Key not found")),
+        }
     }
 }

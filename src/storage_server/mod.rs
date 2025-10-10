@@ -8,7 +8,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, InMemoryStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
 use fork_receiver::ForkReceiver;
 use staging::Staging;
 use logserver::LogServer;
@@ -110,7 +110,8 @@ pub struct StorageNode {
     keystore: AtomicKeyStore,
 
     server: Arc<Server<PinnedStorageServerContext>>,
-    storage: Arc<Mutex<StorageService<RocksDBStorageEngine>>>,
+    // storage: Arc<Mutex<StorageService<RocksDBStorageEngine>>>,
+    storage: Arc<Mutex<StorageService<InMemoryStorageEngine>>>,
     crypto: CryptoService,
 
     fork_receiver: Arc<Mutex<ForkReceiver>>,
@@ -150,7 +151,8 @@ impl StorageNode {
         let storage_config = &config.get().consensus_config.log_storage_config;
         let storage = match storage_config {
             rocksdb_config @ crate::config::StorageConfig::RocksDB(_) => {
-                let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
+                // let _db = RocksDBStorageEngine::new(rocksdb_config.clone());
+                let _db = InMemoryStorageEngine::new();
                 StorageService::new(config.clone(), _db, _chan_depth)
             },
             _ => {
@@ -207,7 +209,6 @@ impl StorageNode {
         let block_broadcaster_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0).into();
 
         let block_broadcaster = BlockBroadcaster::new(BroadcasterConfig::Config(config.clone()), block_broadcaster_client, BroadcastMode::SequencerStar, false, false, block_broadcaster_rx, None, None);
-
 
         Self {
             config,

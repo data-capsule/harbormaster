@@ -46,4 +46,5 @@ pub enum StorageConfig {
     RocksDB(RocksDBConfig),
     FileStorage(FileStorageConfig),
     BlackHole,
+    InMemory,
 }
