@@ -106,7 +106,8 @@ data_dir = "/data/"
 [experiments.sweeping_parameters]
 # num_clients = [1, 4, 8, 16, 32, 48, 96, 128, 256]
 # num_clients = [16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256]
-num_clients = [16, 32, 48, 64, 80, 96, 128, 160, 192, 224, 256]
+# num_clients = [16, 32, 48, 64, 80, 96, 128, 160, 192, 224, 256]
+num_clients = [256]
 # num_clients = [160, 256, 512, 1024]
 
 
