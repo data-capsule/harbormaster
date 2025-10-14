@@ -429,6 +429,7 @@ class Deployment:
         return vms
     
     def get_wan_setup(self, layout):
+        print("custom layouts", self.custom_layouts)
         layout = self.custom_layouts[layout]
         nodes_per_region = layout["nodes_per_region"]
         curr_vms_per_region = [0] * len(nodes_per_region)
@@ -673,6 +674,8 @@ class AWSDeployment(Deployment):
         ]
     
     def get_all_storage_vms(self):
+        print("get_all_storage_vms ****")
+        print(self.nodelist)
         return [
             vm for vm in self.nodelist if "storage" in vm.name
         ]

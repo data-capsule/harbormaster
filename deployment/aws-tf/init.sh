@@ -133,7 +133,9 @@ export HADOOP_CONF_DIR="\$HADOOP_HOME/etc/hadoop"
 export HIVE_HOME="$HIVE_HOME"
 export HIVE_CONF_DIR="\$HIVE_HOME/conf"
 export YARN_CONF_DIR="\$HADOOP_HOME/etc/hadoop"
-export FLINK_HOME="/home/psladmin/repo/flink-sql-benchmark/packages/flink-1.16.3/"
+export FLINK_HOME="/home/psladmin/flink-psl/build-target"
+export FLINK_CONF_DIR="/home/psladmin/flink-psl/build-target/conf"
+export FLINK_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 # PATH and Hadoop client classpath
 export PATH="\$JAVA_HOME/bin:\$HADOOP_HOME/bin:\$HADOOP_HOME/sbin:\$HIVE_HOME/bin:\$PATH"
@@ -214,78 +216,6 @@ sudo bash -c "cat > '$CONF_DIR/mapred-site.xml'" <<'XML'
 </configuration>
 XML
 
-sudo bash -c "cat > '$CONF_DIR/yarn-site.xml'" <<'XML'
-<configuration>
-  <!-- Listen on all interfaces -->
-  <property><name>yarn.resourcemanager.bind-host</name><value>0.0.0.0</value></property>
-
-  <!-- Advertise a reachable private host -->
-  <property><name>yarn.resourcemanager.hostname</name><value>localhost</value></property>
-
-  <property><name>yarn.log-aggregation-enable</name><value>true</value></property>
-  <property><name>yarn.nodemanager.remote-app-log-dir</name><value>/tmp/logs</value></property>
-  <property><name>yarn.log-aggregation.retain-seconds</name><value>604800</value></property>
-
-  <!-- nodemanager caps -->
-  <property><name>yarn.nodemanager.resource.cpu-vcores</name><value>10</value></property>  <!-- or higher -->
-  <property><name>yarn.nodemanager.resource.memory-mb</name><value>24576</value></property>
-  <property><name>yarn.nodemanager.aux-services</name><value>mapreduce_shuffle</value></property>
-
-  <!-- scheduler caps -->
-  <property><name>yarn.scheduler.maximum-allocation-mb</name><value>28672</value></property>
-  <property><name>yarn.scheduler.maximum-allocation-vcores</name><value>10</value></property>
-  <property><name>yarn.scheduler.minimum-allocation-mb</name><value>1024</value></property>
-
-
-  <!-- Explicit addresses (optional but clear) -->
-  <property><name>yarn.resourcemanager.address</name>          <value>localhost:8032</value></property>
-  <property><name>yarn.resourcemanager.scheduler.address</name><value>localhost:8030</value></property>
-  <property><name>yarn.resourcemanager.resource-tracker.address</name><value>localhost:8031</value></property>
-  <property><name>yarn.resourcemanager.admin.address</name>    <value>localhost:8033</value></property>
-
-  <!-- Web UI: bind to all interfaces (or ${PRIV_HOST}:8088 if you prefer) -->
-  <property><name>yarn.resourcemanager.webapp.address</name>   <value>0.0.0.0:8088</value></property>
-
-  <property><name>yarn.nodemanager.aux-services</name><value>mapreduce_shuffle</value></property>
-
-  <!-- in $HADOOP_CONF_DIR/yarn-site.xml on RM+NMs -->
-  <property><name>yarn.application.classpath</name>
-    <value>
-      /usr/local/hadoop/etc/hadoop,
-      /usr/local/hadoop/share/hadoop/common/*,
-      /usr/local/hadoop/share/hadoop/common/lib/*,
-      /usr/local/hadoop/share/hadoop/hdfs/*,
-      /usr/local/hadoop/share/hadoop/hdfs/lib/*,
-      /usr/local/hadoop/share/hadoop/yarn/*,
-      /usr/local/hadoop/share/hadoop/yarn/lib/*,
-      /usr/local/hadoop/share/hadoop/mapreduce/*,
-      /usr/local/hadoop/share/hadoop/mapreduce/lib/*
-    </value>
-  </property>
-
-  <property>
-    <name>yarn.application.classpath</name>
-    <value>
-      /usr/local/hadoop/etc/hadoop,
-      /usr/local/hadoop/share/hadoop/common/*,
-      /usr/local/hadoop/share/hadoop/common/lib/*,
-      /usr/local/hadoop/share/hadoop/hdfs/*,
-      /usr/local/hadoop/share/hadoop/hdfs/lib/*,
-      /usr/local/hadoop/share/hadoop/mapreduce/*,
-      /usr/local/hadoop/share/hadoop/mapreduce/lib/*,
-      /usr/local/hadoop/share/hadoop/yarn/*,
-      /usr/local/hadoop/share/hadoop/yarn/lib/*
-    </value>
-  </property>
-
-  <property>
-    <name>yarn.scheduler.capacity.maximum-am-resource-percent</name>
-    <value>0.8</value>
-  </property>
-
-</configuration>
-XML
-
 sudo bash -c "cat > '$HADOOP_HOME/etc/hadoop/mapred-site.xml'" <<'XML'
 <configuration>
   <property>
@@ -340,42 +270,36 @@ sudo chown -R psladmin:"$GRP" /usr/local/hadoop-3.3.3 /usr/local/hadoop
 sudo mkdir -p /var/lib/hadoop/hdfs/namenode /var/lib/hadoop/hdfs/namenode/current /var/lib/hadoop/hdfs/datanode
 sudo chown -R psladmin:"$GRP" /var/lib/hadoop/hdfs
 
-sudo mkdir -p /home/psladmin/hive-metastore
-sudo chown -R psladmin:"$GRP" /home/psladmin/hive-metastore
-sudo chmod 755 /home/psladmin /home/psladmin/hive-metastore
-
-# ------- Hive install from release tar ----------------------------------------
-sudo mkdir -p "$HIVE_PREFIX"
-sudo tar -xzf "$HIVE_TGZ_PATH" -C "$HIVE_PREFIX"
-sudo ln -sfn "apache-hive-${HIVE_VER}-bin" "$HIVE_HOME"
-sudo chown -R "$TARGET_USER:$TARGET_GROUP" "$HIVE_PREFIX/apache-hive-${HIVE_VER}-bin" "$HIVE_HOME"
-mkdir -p "$HIVE_HOME/logs" "$HIVE_HOME/conf" "$MS_DIR"
-
-# hive-site.xml (Derby + thrift metastore + HS2 bind)
-cat > "$HIVE_HOME/conf/hive-site.xml" <<XML
-<configuration>
-  <property><name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:derby:${MS_DIR}/metastore_db;create=true</value></property>
-  <property><name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.apache.derby.jdbc.EmbeddedDriver</value></property>
-  <property><name>hive.metastore.uris</name>
-    <value>thrift://localhost:${MS_PORT}</value></property>
-  <property><name>hive.metastore.warehouse.dir</name>
-    <value>/user/hive/warehouse</value></property>
-  <property><name>hive.metastore.schema.verification</name><value>true</value></property>
-  <property><name>datanucleus.schema.autoCreateAll</name><value>false</value></property>
-  <property><name>hive.server2.thrift.bind.host</name><value>0.0.0.0</value></property>
-  <property><name>hive.server2.thrift.port</name><value>${HS2_PORT}</value></property>
-
-  <property>
-    <name>hive.metastore.superusers</name>
-    <value>psladmin</value>   <!-- add more comma-separated if needed -->
-  </property>
-</configuration>
-XML
-
 # Cleanup downloads
 rm -rf "$TMP_DL_DIR" || true
+
+# Config
+ZIP_URL="https://fiu-trace.s3.us-east-2.amazonaws.com/build-target.zip"
+DEST_DIR="/home/psladmin/flink-psl"
+
+sudo mkdir -p "$DEST_DIR"
+TMPZIP="$(mktemp)"
+wget -q -O "$TMPZIP" "$ZIP_URL"
+
+# Unzip (overwrite if re-running)
+sudo unzip -o "$TMPZIP" -d "$DEST_DIR"
+rm -f "$TMPZIP"
+
+# Give ownership to psladmin:$GRP
+sudo chown -R psladmin:"$GRP" "$DEST_DIR"
+
+# (Optional) make sure log dir exists and is writable by psladmin
+sudo mkdir -p "$DEST_DIR/build-target/log"
+sudo chown -R psladmin:"$GRP" "$DEST_DIR/build-target/log"
+sudo find "$DEST_DIR/build-target/log" -type d -exec chmod 755 {} \;
+sudo find "$DEST_DIR/build-target/log" -type f -exec chmod 644 {} \;
+
+# Flink tmp dirs (java.io.tmpdir + shuffle)
+GRP="${GRP:-$(id -gn psladmin)}"
+sudo mkdir -p /home/psladmin/flink-tmp/{tmp,shuffle}
+sudo chown -R psladmin:"$GRP" /home/psladmin/flink-tmp
+sudo find /home/psladmin/flink-tmp -type d -exec chmod 755 {} \;
+sudo find /home/psladmin/flink-tmp -type f -exec chmod 644 {} \;
 
 # ------- Passwordless self-SSH for Hadoop scripts (required by start-dfs.sh) --
 # sshd should already be enabled above, but this is idempotent
