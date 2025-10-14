@@ -42,6 +42,7 @@ signature_max_delay_blocks = 50
 num_crypto_workers = 5
 num_worker_threads_per_worker = 4
 num_replier_threads_per_worker = 4
+read_cache_size = 1
 
 [node_config.worker_config.state_storage_config.RocksDB]
 write_buffer_size = 67_108_864 # 64MB
@@ -78,9 +79,9 @@ name = "flink"
 repeats = 1
 num_storage_nodes = 1
 num_sequencer_nodes = 1
+node_distribution = "uniform"
 num_nodes = 1
 type = "flink"
-node_distribution = "flink"
 build_command = "make"
 duration = 60
 
