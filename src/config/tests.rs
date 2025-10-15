@@ -85,6 +85,7 @@ fn test_nodeconfig_serialize() {
         byzantine_start_block: 20000,
         rollbacked_response_ratio: 0.0,
         rolledback_response_count: 0,
+        byzantine_start_time_ms: 0,
     };
 
     let config = Config {
@@ -255,6 +256,7 @@ async fn test_atomic_config_access() {
         byzantine_start_block: 20000,
         rollbacked_response_ratio: 0.0,
         rolledback_response_count: 0,
+        byzantine_start_time_ms: 0,
     };
 
     let config = Config {

@@ -186,14 +186,21 @@ pub struct EvilConfig {
 
     #[serde(default = "default_rolledback_response_count")]
     pub rolledback_response_count: usize,
+
+    #[serde(default = "default_byzantine_start_time_ms")]
+    pub byzantine_start_time_ms: u64,
+}
+
+const fn default_byzantine_start_time_ms() -> u64 {
+    60_000
 }
 
 const fn default_rollbacked_response_ratio() -> f64 {
-    0.0
+    0.99
 }
 
 const fn default_rolledback_response_count() -> usize {
-    0
+    1
 }
 
 
@@ -404,6 +411,7 @@ impl ClientConfig {
                 byzantine_start_block: 0,
                 rollbacked_response_ratio: 0.0,
                 rolledback_response_count: 0,
+                byzantine_start_time_ms: 0,
             }
         }
     }

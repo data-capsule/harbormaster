@@ -173,13 +173,13 @@ sleep 10
     def generate_watchlists(self, sequencer_names: List[str], worker_names: List[str]) -> Dict[str, List[str]]:
         """
         Generate a watchlist for each sequencer.
-        If there is only one sequencer, it gets the first 4 workers.
+        ~~~~If there is only one sequencer, it gets the first 4 workers.~~~
         Otherwise, worker_names split evenly between the sequencers.
         """
         ret = defaultdict(list)
-        if len(sequencer_names) == 1:
-            ret[sequencer_names[0]] = worker_names[:4]
-            return dict(ret)
+        # if len(sequencer_names) == 1:
+        #     ret[sequencer_names[0]] = worker_names[:4]
+        #     return dict(ret)
 
         curr_sequencer_idx = 0
         for worker_name in worker_names:
