@@ -192,8 +192,13 @@ impl KVReadWriteYCSBGenerator {
             let key = key.clone() + &self.get_field_str_from_num(i);
             let val = self.get_next_val();
 
+            #[cfg(not(feature = "app_key_transparency"))]
+            let op_type = ProtoTransactionOpType::Write;
+            #[cfg(feature = "app_key_transparency")]
+            let op_type = ProtoTransactionOpType::StoredProcedure1;
+
             ops.push(ProtoTransactionOp {
-                op_type: ProtoTransactionOpType::Write.into(),
+                op_type: op_type.into(),
                 operands: vec![key.into_bytes(), val]
             });
             

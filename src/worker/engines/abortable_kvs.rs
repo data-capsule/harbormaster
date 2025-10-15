@@ -3,6 +3,8 @@ use std::{collections::HashSet, time::Instant};
 use futures::{stream::FuturesUnordered, StreamExt as _};
 use itertools::Itertools;
 use log::{error, info, trace, warn};
+use rand::Rng;
+use rustls::crypto::CryptoProvider;
 use tokio::sync::oneshot;
 
 use crate::{consensus::batch_proposal::MsgAckChanWithTag, proto::execution::{ProtoTransactionOp, ProtoTransactionOpResult, ProtoTransactionOpType}, utils::channel::Sender, worker::{app::{CacheConnector, ClientHandlerTask, UncommittedResultSet}, block_sequencer::VectorClock, cache_manager::CacheCommand, TxWithAckChanTag}};
@@ -30,6 +32,7 @@ pub struct AbortableKVSTask {
     locked_keys: Vec<(CacheKey, bool /* is_read */)>,
 
     once_lock: bool,
+
 }
 
 enum Response {
@@ -194,6 +197,12 @@ impl AbortableKVSTask {
                     last_write_index = i;
                 },
 
+                #[cfg(feature = "app_key_transparency")]
+                ProtoTransactionOpType::StoredProcedure1 => {
+                    atleast_one_write = true;
+                    last_write_index = i;
+                },
+
                 #[cfg(feature = "app_banking")]
                 ProtoTransactionOpType::StoredProcedure1 => {
                     atleast_one_write = true;
@@ -331,6 +340,12 @@ impl AbortableKVSTask {
 
                 }
 
+                #[cfg(feature = "app_key_transparency")]
+                ProtoTransactionOpType::StoredProcedure1 => {
+                    let user = op.operands[0].clone();
+                    self.key_transparency_refresh_key(user, &mut is_aborted, &mut results, &mut block_seq_num_rx_vec, &mut locked_keys).await;
+                }
+
                 _ => {}
             }
             
@@ -345,6 +360,9 @@ impl AbortableKVSTask {
                 }
 
                 let seq_num = seq_num.unwrap();
+                if seq_num == u64::MAX {
+                    continue;
+                }
                 highest_committed_block_seq_num_needed = std::cmp::max(highest_committed_block_seq_num_needed, seq_num);
             }
 
@@ -590,5 +608,51 @@ impl AbortableKVSTask {
 
     }
 
+    // Generate a random key for the user.
+    // Store the public key.
+    // Return the private key.
+    // Then fire a ACK_BARRIER.
+    // Wait till all nodes see the new write.
+    async fn key_transparency_refresh_key(&mut self, user: Vec<u8>, is_aborted: &mut bool, results: &mut Vec<ProtoTransactionOpResult>, block_seq_num_rx_vec: &mut FuturesUnordered<oneshot::Receiver<u64>>, _locked_keys: &mut Vec<CacheKey>) {
+        use rand::rng;
+        use ed25519_dalek::SigningKey;
 
+        let secret_key: [u8; 32] = rng().random();
+        let signing_key = SigningKey::from_bytes(&secret_key);
+        let public_key = signing_key.verifying_key();
+
+
+        // Next part is similar to a DWW write.
+        let key = user.clone();
+        let value = public_key.to_bytes().to_vec();
+        let res = self.cache_connector.dispatch_write_request(key, value).await;
+        if let std::result::Result::Err(_e) = res {
+            *is_aborted = true;
+            return;
+        }
+
+        let (_, block_seq_num_rx) = res.unwrap();
+        if let Some(block_seq_num_rx) = block_seq_num_rx {
+            block_seq_num_rx_vec.push(block_seq_num_rx);
+        }
+        results.push(ProtoTransactionOpResult {
+            success: true,
+            values: vec![],
+        });
+
+        // Now send an ACK_BARRIER with key = "barrier:{public_key}"
+        let barrier_key = format!("barrier:{}", hex::encode(public_key.to_bytes()));
+        let barrier_key = barrier_key.as_bytes().to_vec();
+        let total_workers = self.cache_connector.blocking_client.0 // Very roundabout way to get to the config.
+            .config.get().net_config.nodes.keys()
+            .filter(|name| name.starts_with("node"))
+            .count();
+        let (res, waiter_rx) = self.cache_connector.dispatch_ack_barrier_request(barrier_key.clone(), total_workers as f64).await;
+        block_seq_num_rx_vec.push(waiter_rx);
+        if let std::result::Result::Err(_e) = res {
+            *is_aborted = true;
+            return;
+        }
+
+    }
 }

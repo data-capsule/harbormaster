@@ -117,6 +117,30 @@ impl CacheConnector {
         }), Some(seq_num_rx))
     }
 
+    async fn __dispatch_counter_read_request(
+        &self,
+        key: Vec<u8>,
+    ) -> anyhow::Result<f64, CacheError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let seq_num_query = BlockSeqNumQuery::DontBother;
+        let command = CacheCommand::Get(key.clone(), false, seq_num_query, tx);
+
+        self.cache_tx.send(command).await.unwrap();
+        let result = rx.await.unwrap();
+
+        if let std::result::Result::Ok(CachedValue::DWW(_)) = &result {
+            return Err(CacheError::TypeMismatch);
+        }
+
+        result.map(|v| {
+            if let CachedValue::PNCounter(v) = v {
+                v.get_value()
+            } else {
+                unreachable!()
+            }
+        })
+    }
+
     pub async fn dispatch_write_request(
         &self,
         key: Vec<u8>,
@@ -158,6 +182,40 @@ impl CacheConnector {
         self.cache_tx.send(command).await.unwrap();
         let result = response_rx.await.unwrap()?;
         std::result::Result::Ok(result as f64)
+    }
+
+    pub async fn dispatch_ack_barrier_request(
+        &self,
+        key: Vec<u8>,
+        max_val: f64,
+    ) -> (anyhow::Result<f64, CacheError>, tokio::sync::oneshot::Receiver<u64>) {
+        let (response_tx, response_rx) = oneshot::channel();
+        let command = CacheCommand::AckBarrier(key.clone(), BlockSeqNumQuery::DontBother, response_tx);
+        self.cache_tx.send(command).await.unwrap();
+        let result = response_rx.await.unwrap();
+
+        let counter_key_str = format!("counter:{}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)));
+        let counter_key = counter_key_str.as_bytes().to_vec();
+
+        let (waiter_tx, waiter_rx) = oneshot::channel();
+        let command = CacheCommand::RegisterAckWaiter(counter_key.clone(), waiter_tx, max_val);
+        self.cache_tx.send(command).await.unwrap();
+        // let _ = waiter_rx.await.unwrap();
+        
+        // loop {
+        //     let result = self.__dispatch_counter_read_request(counter_key.clone()).await.unwrap();
+        //     if (result - max_val).abs() < 1e-6 {
+        //         break;
+        //     }
+        //     tokio::task::yield_now().await;
+        //     // tokio::time::sleep(Duration::from_millis(50)).await;
+        // }
+
+        if let std::result::Result::Ok(result) = result {
+            (std::result::Result::Ok(result as f64), waiter_rx)
+        } else {
+            (std::result::Result::Err(result.unwrap_err()), waiter_rx)
+        }
     }
 
     pub async fn dispatch_decrement_request(

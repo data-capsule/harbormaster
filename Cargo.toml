@@ -106,6 +106,7 @@ app_kvs = []
 app_sql = []
 app_ml = []
 app_banking = []
+app_key_transparency = []
 
 # Protocols specs
 lucky_raft = ["fixed_leader", "never_sign", "no_qc"]
@@ -119,7 +120,7 @@ pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 # Baseline
 nimble = []
 
-default = ["pirateship", "app_banking", "storage", "fast_path", "platforms", "gossip", "evil"]
+default = ["pirateship", "storage", "fast_path", "platforms", "gossip", "evil", "app_key_transparency"]
 
 
 [profile.release]

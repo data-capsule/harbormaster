@@ -5,9 +5,10 @@ use num_bigint::{BigInt, Sign};
 #[cfg(feature = "evil")]
 use rand::distr::{Distribution, weighted::WeightedIndex};
 use rand::Rng as _;
+use rand_distr::num_traits::ConstZero;
 use thiserror::Error;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot::{self, error::RecvError}, Mutex};
-use crate::{config::{AtomicPSLWorkerConfig, RocksDBConfig, StorageConfig}, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{cache::Cache, channel::{Receiver, Sender}, timer::ResettableTimer, types::{CacheKey, CachedValue}}, worker::{block_sequencer::{cached_value_to_val_hash, AdvanceVCCommand, BlockSeqNumQuery, VectorClock}, TxWithAckChanTag}};
+use crate::{config::{AtomicPSLWorkerConfig, RocksDBConfig, StorageConfig}, crypto::{hash, CachedBlock}, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType}, rpc::SenderType, storage_server::fork_receiver::ForkReceiverCommand, utils::{cache::Cache, channel::{Receiver, Sender}, timer::ResettableTimer, types::{CacheKey, CachedValue, PNCounterValue}}, worker::{block_sequencer::{cached_value_to_val_hash, AdvanceVCCommand, BlockSeqNumQuery, VectorClock}, TxWithAckChanTag}};
 use crate::worker::block_sequencer::SequencerCommand;
 
 #[derive(Error, Debug)]
@@ -28,6 +29,7 @@ pub enum CacheError {
 #[derive(Debug)]
 pub enum CacheCommand {
     Get(CacheKey /* Key */, bool /* block snapshot */, BlockSeqNumQuery, oneshot::Sender<Result<CachedValue, CacheError>>,),
+    RegisterAckWaiter(CacheKey /* Key */, oneshot::Sender<u64>, f64 /* target value */),
     Put(
         CacheKey /* Key */,
         CachedValue /* Value */,
@@ -37,6 +39,11 @@ pub enum CacheCommand {
     Increment(
         CacheKey /* Key */,
         f64 /* Value */,
+        BlockSeqNumQuery,
+        oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
+    ),
+    AckBarrier(
+        CacheKey /* Key */,
         BlockSeqNumQuery,
         oneshot::Sender<Result<u64 /* seq_num */, CacheError>>,
     ),
@@ -167,6 +174,8 @@ pub struct CacheManager {
     blocked_on_vc_wait: Option<oneshot::Receiver<()>>,
     block_on_read_snapshot: Option<oneshot::Receiver<()>>,
 
+    registered_ack_waiters: HashMap<CacheKey, (oneshot::Sender<u64>, f64)>,
+
 
     #[cfg(feature = "evil")]
     __evil_weights: [(bool, f64); 2],
@@ -217,6 +226,8 @@ impl CacheManager {
             log_timer,
             blocked_on_vc_wait: None,
             block_on_read_snapshot: None,
+
+            registered_ack_waiters: HashMap::new(),
 
             #[cfg(feature = "evil")]
             __evil_weights,
@@ -538,6 +549,45 @@ impl CacheManager {
                 // let current_vc = current_vc_rx.await.unwrap();
                 trace!("Write key: {}, value_increment: {}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)), value);
             },
+            CacheCommand::AckBarrier(key, seq_num_query, response_tx) => {
+                let _ = self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp { key: key.clone(), value: CachedValue::new_dww(vec![], BigInt::ZERO), is_ack_barrier: true }).await;
+                
+                let counter_key = format!("counter:{}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)));
+                let counter_key = counter_key.as_bytes().to_vec();
+                let my_name = self.config.get().net_config.name.clone();
+                if self.cache.contains_key(&counter_key) {
+                    let (Some(mut res), _) = self.cache.get(&counter_key) else {
+                        unreachable!();
+                    };
+                    let final_value = res.get_pn_counter_mut().unwrap()
+                        .blind_increment(my_name, 1.0);
+                    let _value = res.get_pn_counter().unwrap().clone();
+                    self.cache.put(counter_key.clone(), res);
+                    response_tx.send(Ok(final_value as u64 /* It doesn't matter what the seq_num is here. */)).unwrap();
+                    let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: counter_key.clone(), value: CachedValue::from_pn_counter(_value), seq_num_query, /* current_vc: current_vc_tx */ }).await;
+                    return;
+                }
+
+                let mut cached_value = CachedValue::new_pn_counter();
+                cached_value.get_pn_counter_mut().unwrap().blind_increment(my_name, 1.0);
+
+                self.cache.put(counter_key.clone(), cached_value.clone());
+                response_tx.send(Ok(cached_value.get_pn_counter().unwrap().get_value() as u64 /* It doesn't matter what the seq_num is here. */)).unwrap();
+                // let (current_vc_tx, current_vc_rx) = oneshot::channel();
+                let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp { key: counter_key.clone(), value: cached_value, seq_num_query, /* current_vc: current_vc_tx */ }).await;
+                
+            }
+            CacheCommand::RegisterAckWaiter(key, response_tx, target_value) => {
+                let chk = self.cache.get(&key).0;
+                if chk.is_some() {
+                    let val = chk.unwrap().get_pn_counter().unwrap().get_value();
+                    if (val - target_value).abs() < 1e-6 {
+                        let _ = response_tx.send(u64::MAX);
+                        return;
+                    }
+                }
+                self.registered_ack_waiters.insert(key, (response_tx, target_value));
+            }
             CacheCommand::Decrement(key, value, seq_num_query, response_tx) => {
                 assert!(value >= 0.0);
                 let my_name = self.config.get().net_config.name.clone();
@@ -637,7 +687,27 @@ impl CacheManager {
 
             let ops = tx.on_crash_commit.as_ref().unwrap();
             for op in &ops.ops {
-                let Some((key, cached_value)) = process_tx_op(op) else { continue };
+                let Some((key, cached_value)) = (
+                    // TODO: Currently ACK_BARRIER does not flow transitively.
+                    if op.op_type() == ProtoTransactionOpType::AckBarrier {
+                        // Consider this as a self increment.
+                        let key = &op.operands[0];
+                        let key = format!("counter:{}", String::from_utf8(key.clone()).unwrap_or(hex::encode(key)));
+                        let key = key.as_bytes().to_vec();
+                
+                        let mut counter = PNCounterValue::new();
+                        counter.blind_increment(self.config.get().net_config.name.clone(), 1.0);
+                        let value = CachedValue::from_pn_counter(counter);
+
+                        Some((key, value))
+
+                    } else {
+                        process_tx_op(op)
+                    }
+                ) else {
+                    continue;
+                };
+                // let Some((key, cached_value)) = process_tx_op(op) else { continue };
 
                 // let cached_value = CachedValue {
                 //     value,
@@ -657,8 +727,20 @@ impl CacheManager {
                             dww_val.merge_cached(cached_value.get_dww().unwrap().clone())
                         },
                         CachedValue::PNCounter(pn_counter_val) => {
-                            pn_counter_val.merge(cached_value.get_pn_counter().unwrap().clone())
-                                .map(|_| 0u64).map_err(|_| 0u64)
+                            let val = pn_counter_val.merge(cached_value.get_pn_counter().unwrap().clone())
+                                .map(|_| 0u64).map_err(|_| 0u64);
+
+                            if self.registered_ack_waiters.contains_key(&key) {
+                                let target_val = self.registered_ack_waiters.get(&key).unwrap().1;
+                                let val = pn_counter_val.get_value();
+                                if (val - target_val).abs() < 1e-6 {
+                                    let tx = self.registered_ack_waiters.remove(&key).unwrap().0;
+                                    let _ = tx.send(u64::MAX);
+                                }
+                            }
+
+
+                            val
                             // Ok(0) // The number doesn't matter here
                             // PN Counters must always be propagated.
                         }
@@ -685,6 +767,7 @@ impl CacheManager {
                     let _ = self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp {
                         key: key.clone(),
                         value: cached_value.clone(),
+                        is_ack_barrier: false,
                         // current_vc: current_vc_tx,
                     }).await;
                     // let current_vc = current_vc_rx.await.unwrap();

@@ -45,6 +45,7 @@ pub enum SequencerCommand {
     OtherWriteOp {
         key: CacheKey,
         value: CachedValue,
+        is_ack_barrier: bool,
         // current_vc: oneshot::Sender<VectorClock>,
     },
 
@@ -245,7 +246,7 @@ pub struct BlockSequencer {
     curr_block_seq_num: u64,
     last_block_hash: FutureHash,
     self_write_op_bag: Vec<(CacheKey, CachedValue)>,
-    all_write_op_bag: Vec<(CacheKey, CachedValue)>,
+    all_write_op_bag: Vec<(CacheKey, CachedValue, bool)>,
     self_read_op_bag: Vec<(CacheKey, Option<CachedValue>, usize, VectorClock)>,
 
     curr_vector_clock: VectorClock,
@@ -342,14 +343,14 @@ impl BlockSequencer {
                 self.self_write_op_bag.push((key.clone(), value.clone()));
 
                 // if let CachedValue::DWW(_) = &value {
-                    self.all_write_op_bag.push((key.clone(), value));
+                    self.all_write_op_bag.push((key.clone(), value, false));
                 // }
                 // self.dirty_keys.insert(key);
 
                 match seq_num_query {
                     BlockSeqNumQuery::DontBother => {}
                     BlockSeqNumQuery::WaitForSeqNum(sender) => {
-                        sender.send(self.curr_block_seq_num).unwrap();
+                        let _ = sender.send(self.curr_block_seq_num);
                     }
                 }
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
@@ -368,7 +369,7 @@ impl BlockSequencer {
                     }
                 }
             },
-            SequencerCommand::OtherWriteOp { key, value, /* current_vc */ } => {
+            SequencerCommand::OtherWriteOp { key, value, is_ack_barrier } => {
                 
                 // All OtherWriteOps come before any SelfReadOp for a given block.
                 // If I have SelfWriteOp(x) <-- OtherWriteOp(x) <-- SelfReadOp(x),
@@ -385,7 +386,7 @@ impl BlockSequencer {
                 //     return;
                 // }
                 
-                self.all_write_op_bag.push((key, value));
+                self.all_write_op_bag.push((key, value, is_ack_barrier));
                 // current_vc.send(self.curr_vector_clock.clone()).unwrap();
             },
             SequencerCommand::AdvanceVC(commands) => {
@@ -563,9 +564,18 @@ impl BlockSequencer {
         panic!("This breaks auditability.");
         let seq_num = self.curr_block_seq_num;
 
+        let all_writes = self.all_write_op_bag.drain(..).filter(|(_, _, is_ack_barrier)| !*is_ack_barrier)
+            .map(|(key, value, _)| (key, value))
+            .collect::<Vec<_>>();
+
+        let ack_barriers = self.all_write_op_bag.drain(..).filter(|(_, _, is_ack_barrier)| *is_ack_barrier)
+            .map(|(key, _value, _)| key)
+            .collect::<Vec<_>>();
+
         let all_writes = Self::wrap_vec(
-            Self::dedup_vec(self.all_write_op_bag.drain(..)),
+            Self::dedup_vec(all_writes.drain(..)),
             vec![], // Reads are not forwarded to other nodes.
+            ack_barriers,
             seq_num,
             Some(self.curr_vector_clock.serialize()),
             String::from("god"),
@@ -602,10 +612,20 @@ impl BlockSequencer {
         let read_set = Self::prepare_read_set(self_reads);
         // read_set.push((b"root_hash".to_vec(), root_hash, origin.clone(), 0));
 
+        let ack_barriers = self.all_write_op_bag.iter().filter(|(_, _, is_ack_barrier)| *is_ack_barrier)
+            .map(|(key, _value, _)| key.clone())
+            .collect::<Vec<_>>();
+
+        let mut all_writes = self.all_write_op_bag.drain(..).filter(|(_, _, is_ack_barrier)| !*is_ack_barrier)
+            .map(|(key, value, _)| (key, value))
+            .collect::<Vec<_>>();
+        
+
 
         let all_writes = Self::wrap_vec(
-            Self::dedup_vec(self.all_write_op_bag.drain(..)),
+            Self::dedup_vec(all_writes.drain(..)),
             vec![], // Reads are not forwarded to other nodes.
+            ack_barriers,
             seq_num,
             Some(self.curr_vector_clock.serialize()),
             origin.clone(),
@@ -615,6 +635,7 @@ impl BlockSequencer {
         let self_writes_and_reads = Self::wrap_vec(
             self.self_write_op_bag.drain(..).collect(),
             read_set,
+            vec![], // Ack barriers not logged.
             seq_num,
             Some(read_vc.serialize()),
             origin,
@@ -662,33 +683,52 @@ impl BlockSequencer {
     fn wrap_vec(
         writes: Vec<(CacheKey, CachedValue)>,
         reads: Vec<(CacheKey, HashType, u64, VectorClock)>,
+        ack_barriers: Vec<CacheKey>,
         seq_num: u64,
         vector_clock: Option<ProtoVectorClock>,
         origin: String,
         chain_id: u64,
     ) -> ProtoBlock {
+
+        let mut tx_list = writes.into_iter()
+            .map(|(key, value)| {
+                let op_type = if let CachedValue::PNCounter(_) = &value {
+                    ProtoTransactionOpType::Increment as i32
+                } else {
+                    ProtoTransactionOpType::Write as i32
+                };
+                ProtoTransaction {
+                    on_receive: None,
+                    on_crash_commit: Some(ProtoTransactionPhase {
+                        ops: vec![ProtoTransactionOp { 
+                            op_type,
+                            operands: vec![key, bincode::serialize(&value).unwrap()], 
+                        }],
+                    }),
+                    on_byzantine_commit: None,
+                    is_reconfiguration: false,
+                    is_2pc: false,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        tx_list.extend(ack_barriers.into_iter()
+            .map(|key| {
+                ProtoTransaction {
+                    on_receive: None,
+                    on_crash_commit: Some(ProtoTransactionPhase {
+                        ops: vec![ProtoTransactionOp { 
+                            op_type: ProtoTransactionOpType::AckBarrier as i32,
+                            operands: vec![key], 
+                        }],
+                    }),
+                    on_byzantine_commit: None,
+                    is_reconfiguration: false,
+                    is_2pc: false,
+                }
+            }));
         ProtoBlock {
-            tx_list: writes.into_iter()
-                .map(|(key, value)| {
-                    let op_type = if let CachedValue::PNCounter(_) = &value {
-                        ProtoTransactionOpType::Increment as i32
-                    } else {
-                        ProtoTransactionOpType::Write as i32
-                    };
-                    ProtoTransaction {
-                        on_receive: None,
-                        on_crash_commit: Some(ProtoTransactionPhase {
-                            ops: vec![ProtoTransactionOp { 
-                                op_type,
-                                operands: vec![key, bincode::serialize(&value).unwrap()], 
-                            }],
-                        }),
-                        on_byzantine_commit: None,
-                        is_reconfiguration: false,
-                        is_2pc: false,
-                    }
-                })
-                .collect(),
+            tx_list,
             n: seq_num,
             parent: vec![],
             view: 0,
@@ -800,7 +840,10 @@ impl BlockSequencer {
 
 
     fn make_root_hash(&mut self) -> HashType {
-        for (key, value) in self.all_write_op_bag.iter() {
+        for (key, value, is_ack_barrier) in self.all_write_op_bag.iter() {
+            if *is_ack_barrier {
+                continue;
+            }
             let hsh = match value {
                 CachedValue::DWW(value) => &value.val_hash.to_bytes_be().1,
                 CachedValue::PNCounter(value) => &value.get_value().to_be_bytes().to_vec(),

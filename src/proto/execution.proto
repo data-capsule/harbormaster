@@ -36,6 +36,8 @@ enum ProtoTransactionOpType {
     BLOCK_INDEFINITELY = 15;
     UNBLOCK = 16;
 
+    ACK_BARRIER = 17;
+
 }
 
 message ProtoTransactionOp {
