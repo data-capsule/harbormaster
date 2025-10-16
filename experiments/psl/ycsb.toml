@@ -155,7 +155,7 @@ name = "throughput_latency_client_sweep"
 plotter = "tput_latency_sweep_psl"
 ramp_up = 10
 ramp_down = 10
-output = "storage.pdf"
+output = "ycsb-r0.pdf"
 force_parse = true
 
 [results.legends]

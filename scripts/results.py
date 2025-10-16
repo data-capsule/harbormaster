@@ -771,7 +771,7 @@ class Result:
                 # plt.yscale("log")
                 plt.ylim((0, 10))
                 # plt.xlim((50, 550))
-                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=legends_ncols, fontsize=70)
+                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.3), ncol=legends_ncols, fontsize=65)
                 plt.xticks(fontsize=70)
                 plt.yticks(fontsize=70)
 
