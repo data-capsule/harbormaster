@@ -81,7 +81,7 @@ ramp_down_ms = 10_000
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 300_000
 num_fields = 1
-val_size = 1000
+val_size = 100
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -122,6 +122,4 @@ output = "ycsb-r0.pdf"
 force_parse = true
 
 [results.legends]
-ycsb_r0_w16_psl = "HarborMaster"
-ycsb_r0_w16_nimble = "Nimble"
-ycsb_r0_w16_unprotected = "Unprotected"
+ycsb_r100_w16_psl = "HarborMaster"
