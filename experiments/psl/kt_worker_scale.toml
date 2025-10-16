@@ -102,7 +102,7 @@ node_distribution = "tag:worker"
 storage_distribution = "uniform"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
-duration = 60
+duration = 30
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
@@ -162,7 +162,7 @@ ramp_down = 10
 output = "kt_worker_scale.pdf"
 force_parse = true
 # xlabels = ["1", "15", "31", "63"]
-xlabels = ["2", "4", "8", "16"]
+xlabels = ["1", "2", "4", "8", "16"]
 xtitle = "Number of Nodes"
 # legend_order = ["Nimble", "HarborMaster", "Unprotected"]
 legend_order = ["HarborMaster"]

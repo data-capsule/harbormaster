@@ -653,9 +653,5 @@ impl AbortableKVSTask {
             *is_aborted = true;
             return;
         }
-        tokio::spawn(async move {
-            let _ = waiter_rx.await;
-        });
-
     }
 }

@@ -199,7 +199,7 @@ impl CacheConnector {
 
         let (waiter_tx, waiter_rx) = oneshot::channel();
         let command = CacheCommand::RegisterAckWaiter(counter_key.clone(), waiter_tx, max_val);
-        self.cache_tx.send(command).await.unwrap();
+        // self.cache_tx.send(command).await.unwrap();
         // let _ = waiter_rx.await.unwrap();
         
         // loop {
