@@ -7,7 +7,7 @@ use psl::proto::client::ProtoClientRequest;
 use psl::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase};
 use psl::rpc::server::LatencyProfile;
 use psl::rpc::{PinnedMessage, SenderType};
-use psl::utils::channel::make_channel;
+use psl::utils::channel::{make_channel, Sender};
 use psl::worker::TxWithAckChanTag;
 use psl::{sequencer, storage_server, worker};
 use tokio::fs::File;
@@ -96,26 +96,23 @@ async fn run_sequencer(cfg: Config) -> NodeType {
 }
 
 
-async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
-    let (client_request_tx, client_request_rx) = make_channel::<TxWithAckChanTag>(cfg.rpc_config.channel_depth as usize);
-
-    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(cfg.rpc_config.channel_depth as usize);
+async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_request_tx: Sender<TxWithAckChanTag>) {
+    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(channel_depth);
 
     let __dummy_tx = reply_tx.clone();
     tokio::spawn(async move {
         // Just send "yo" to "/tmp/psl_fifo_out" for every response.
 
         // Open in append mode.
-        let file = File::options().append(true).create(true).open("/tmp/psl_fifo_out").await.unwrap();
+        let file = File::options().append(true).create(true).open(format!("/tmp/psl_fifo_out{}", idx)).await.unwrap();
         let mut writer = BufWriter::new(file);
         while let Some(_) = reply_rx.recv().await {
             writer.write_all(b"yo\n").await.unwrap();
-            writer.flush().await.unwrap();
+            // writer.flush().await.unwrap();
         }
         __dummy_tx.send((PinnedMessage::from(vec![], 0, SenderType::Anon), LatencyProfile::new())).await.unwrap();
     });
 
-    let _tx = client_request_tx.clone();
     tokio::spawn(async move {
         // Read "/tmp/psl_fifo_in"
         // Format: 
@@ -123,7 +120,7 @@ async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
         // Write request: W base64_key base64_value
 
 
-        let file = File::open("/tmp/psl_fifo_in").await.unwrap();
+        let file = File::open(format!("/tmp/psl_fifo_in{}", idx)).await.unwrap();
         let mut reader = BufReader::new(file);
         let mut line = Vec::new();
         let mut client_tag = 0;
@@ -141,6 +138,10 @@ async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
             client_tag += 1;
             match op {
                 "R" => {
+                    if request.len() < 2 {
+                        error!("Invalid request: {:?}", request);
+                        continue;
+                    }
                     let key = request[1];
                     let request = ProtoTransaction {
                         on_receive: Some(ProtoTransactionPhase {
@@ -156,10 +157,14 @@ async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
                     };
 
 
-                    let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(request), (reply_tx.clone(), client_tag, SenderType::Auth("client1".to_string(), 100)));
-                    _tx.send(tx_with_ack_chan_tag).await.unwrap();
+                    let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(request), (reply_tx.clone(), client_tag, SenderType::Auth("client1".to_string(), 100 + idx as u64)));
+                    client_request_tx.send(tx_with_ack_chan_tag).await.unwrap();
                 }
                 "W" => {
+                    if request.len() < 3 {
+                        error!("Invalid request: {:?}", request);
+                        continue;
+                    }
                     let key = request[1];
                     let value = request[2];
                     let request = ProtoTransaction {
@@ -175,8 +180,8 @@ async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
                         is_reconfiguration: false,
                     };
 
-                    let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(request), (reply_tx.clone(), client_tag, SenderType::Auth("client1".to_string(), 100)));
-                    _tx.send(tx_with_ack_chan_tag).await.unwrap();
+                    let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(request), (reply_tx.clone(), client_tag, SenderType::Auth("client1".to_string(), 100 + idx as u64)));
+                    client_request_tx.send(tx_with_ack_chan_tag).await.unwrap();
                 },
                 _ => {
                     warn!("Unknown operation: {}", op);
@@ -188,6 +193,15 @@ async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
 
         panic!("Drop!");
     });
+}
+
+async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
+    let (client_request_tx, client_request_rx) = make_channel::<TxWithAckChanTag>(cfg.rpc_config.channel_depth as usize);
+
+    for i in 1..=4 {
+        prepare_fifo_reader_writer(i, cfg.rpc_config.channel_depth as usize, client_request_tx.clone()).await;
+    }
+    
     
     let node = worker::PSLWorker::<worker::engines::AbortableKVSTask>::mew(cfg, client_request_tx, client_request_rx);
 
