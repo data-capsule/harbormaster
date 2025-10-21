@@ -101,10 +101,10 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
 
     let __dummy_tx = reply_tx.clone();
     tokio::spawn(async move {
-        // Just send "yo" to "/tmp/psl_fifo_out" for every response.
+        // Just send "yo" to "/tmp/psl_fifo/psl_fifo_out" for every response.
 
         // Open in append mode.
-        let file = File::options().append(true).create(true).open(format!("/tmp/psl_fifo_out{}", idx)).await.unwrap();
+        let file = File::options().append(true).create(true).open(format!("/tmp/psl_fifo/psl_fifo_out{}", idx)).await.unwrap();
         let mut writer = BufWriter::new(file);
         while let Some(_) = reply_rx.recv().await {
             writer.write_all(b"yo\n").await.unwrap();
@@ -114,13 +114,13 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
     });
 
     tokio::spawn(async move {
-        // Read "/tmp/psl_fifo_in"
+        // Read "/tmp/psl_fifo/psl_fifo_in"
         // Format: 
         // Read request: R base64_key
         // Write request: W base64_key base64_value
 
 
-        let file = File::open(format!("/tmp/psl_fifo_in{}", idx)).await.unwrap();
+        let file = File::open(format!("/tmp/psl_fifo/psl_fifo_in{}", idx)).await.unwrap();
         let mut reader = BufReader::new(file);
         let mut line = Vec::new();
         let mut client_tag = 0;
