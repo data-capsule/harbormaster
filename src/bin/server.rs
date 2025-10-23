@@ -8,12 +8,14 @@ use psl::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransacti
 use psl::rpc::server::LatencyProfile;
 use psl::rpc::{PinnedMessage, SenderType};
 use psl::utils::channel::{make_channel, Sender};
+use psl::utils::timer::ResettableTimer;
 use psl::worker::TxWithAckChanTag;
 use psl::{sequencer, storage_server, worker};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::{runtime, signal};
-use std::process::exit;
+use std::process::{exit, Command};
+use std::time::Duration;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
 
@@ -100,15 +102,35 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(channel_depth);
 
     let __dummy_tx = reply_tx.clone();
+
+    // let (eof_tx, eof_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         // Just send "yo" to "/tmp/psl_fifo/psl_fifo_out" for every response.
 
         // Open in append mode.
         let file = File::options().append(true).create(true).open(format!("/tmp/psl_fifo/psl_fifo_out{}", idx)).await.unwrap();
+        
         let mut writer = BufWriter::new(file);
-        while let Some(_) = reply_rx.recv().await {
-            writer.write_all(b"yo\n").await.unwrap();
-            // writer.flush().await.unwrap();
+        let flush_timer = ResettableTimer::new(Duration::from_secs(1));
+
+        flush_timer.run().await;
+
+        loop {
+            tokio::select! {
+                _ = flush_timer.wait() => {
+                    writer.flush().await.unwrap();
+                }
+                Some(_) = reply_rx.recv() => {
+                    writer.write_all(b"yo\n").await.unwrap();
+                },
+                // Ok(_) = eof_rx => {
+                //     writer.flush().await.unwrap();
+                //     let file = writer.into_inner();
+                //     file.sync_all().await.unwrap();
+                //     drop(file);
+                //     return;
+                // }
+            }
         }
         __dummy_tx.send((PinnedMessage::from(vec![], 0, SenderType::Anon), LatencyProfile::new())).await.unwrap();
     });
@@ -183,6 +205,10 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
                     let tx_with_ack_chan_tag: TxWithAckChanTag = (Some(request), (reply_tx.clone(), client_tag, SenderType::Auth("client1".to_string(), 100 + idx as u64)));
                     client_request_tx.send(tx_with_ack_chan_tag).await.unwrap();
                 },
+                // "E" => {
+                //     eof_tx.send(()).unwrap();
+                //     break;
+                // }
                 _ => {
                     warn!("Unknown operation: {}", op);
                 }
@@ -195,9 +221,20 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
     });
 }
 
+async fn make_all_fifo_files(total: usize) {
+    Command::new("mkdir").arg("-p").arg("/tmp/psl_fifo").output().unwrap();
+    
+    for i in 1..=total {
+        Command::new("mkfifo").arg(format!("/tmp/psl_fifo/psl_fifo_in{}", i)).output().unwrap();
+        Command::new("mkfifo").arg(format!("/tmp/psl_fifo/psl_fifo_out{}", i)).output().unwrap();
+    }
+
+}
+
 async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
     let (client_request_tx, client_request_rx) = make_channel::<TxWithAckChanTag>(cfg.rpc_config.channel_depth as usize);
 
+    make_all_fifo_files(4).await;
     for i in 1..=4 {
         prepare_fifo_reader_writer(i, cfg.rpc_config.channel_depth as usize, client_request_tx.clone()).await;
     }
