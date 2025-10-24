@@ -74,14 +74,14 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 1
+max_concurrent_requests = 16
 ramp_up_ms = 10_000
 ramp_down_ms = 10_000
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 300_000
 num_fields = 1
-val_size = 100
+val_size = 1000
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -114,12 +114,17 @@ read_cache_size = [1, 30_000, 60_000, 150_000, 210_000, 300_000]
 
 
 [[results]]
-name = "throughput_latency_client_sweep"
-plotter = "tput_latency_sweep_psl"
+name = "stacked_bar_graph"
+plotter = "stacked_bar_graph_psl"
 ramp_up = 10
 ramp_down = 10
-output = "ycsb-r0.pdf"
+output = "read_caching.pdf"
 force_parse = true
+# xlabels = ["1", "15", "31", "63"]
+xlabels = ["0", "0.1", "0.2", "0.5", "0.7", "1.0"]
+xtitle = "Cache Size / Total Keyspace Size"
+legend_order = ["HarborMaster"]
+
 
 [results.legends]
 ycsb_r100_w16_psl = "HarborMaster"

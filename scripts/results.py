@@ -1055,7 +1055,7 @@ class Result:
         fig, ax = plt.subplots(layout="constrained")
         for i, (legend, stats) in enumerate(plot_dict_items):
             rects = ax.bar(
-                bar_start_pos + (gap_between_bars + i * bar_width), # Where to start the bar
+                bar_start_pos + (gap_between_bars + i * bar_width - 0.1), # Where to start the bar
                 plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3,
 
@@ -1071,12 +1071,12 @@ class Result:
         ax.set_xticks(label_pos, xlabels)
         plt.ylim(0, ylim+50)
         # plt.yticks([0, 5, 10, 15, 20], fontsize=90)
-        plt.ylim((0, 40))
-        plt.ylabel("Throughput (k req/s)", fontsize=90)
+        plt.ylim((0, 1000))
+        plt.ylabel("Throughput (k req/s)", fontsize=85)
         if "xtitle" in self.kwargs:
-            plt.xlabel(self.kwargs["xtitle"], fontsize=90)
+            plt.xlabel(self.kwargs["xtitle"], fontsize=80)
         plt.xticks(fontsize=80)
-        # plt.yticks(fontsize=90)
+        # plt.yticks(fontsize=80)
 
         if len(plot_dict_items) > 1:
             plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.28), fontsize=60, columnspacing=0.3)
