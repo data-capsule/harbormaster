@@ -115,13 +115,16 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
 
         flush_timer.run().await;
 
+        let mut ctr = 0;
         loop {
             tokio::select! {
                 _ = flush_timer.wait() => {
                     writer.flush().await.unwrap();
+                    ctr = 0; 
                 }
                 Some(_) = reply_rx.recv() => {
                     writer.write_all(b"yo\n").await.unwrap();
+                    ctr += 1;
                 },
                 // Ok(_) = eof_rx => {
                 //     writer.flush().await.unwrap();
@@ -130,6 +133,10 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
                 //     drop(file);
                 //     return;
                 // }
+            }
+            if ctr >= 1000 {
+                writer.flush().await.unwrap();
+                ctr = 0;
             }
         }
         __dummy_tx.send((PinnedMessage::from(vec![], 0, SenderType::Anon), LatencyProfile::new())).await.unwrap();
