@@ -19,6 +19,7 @@ use std::process::{exit, Command};
 use std::time::Duration;
 use std::{env, fs, io, path, sync::{atomic::AtomicUsize, Arc, Mutex}};
 use std::io::Write;
+use psl::worker::engines::LiteTask;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
@@ -87,7 +88,7 @@ fn get_feature_set() -> (&'static str, &'static str) {
 enum NodeType {
     Sequencer(sequencer::SequencerNode),
 
-    Worker(worker::PSLWorker<worker::engines::AbortableKVSTask>),
+    Worker(worker::PSLWorker<worker::engines::LiteTask>),
 
     Storage(storage_server::StorageNode),
 
@@ -167,7 +168,6 @@ async fn prepare_fifo_reader_writer(idx: usize, channel_depth: usize, client_req
         let mut line = Vec::new();
         let mut client_tag = 0;
         while let Ok(n) = reader.read_until(b'\n', &mut line).await {
-            continue;
             if n == 0 {
                 continue;
             }
@@ -261,7 +261,7 @@ async fn run_worker(cfg: PSLWorkerConfig) -> NodeType {
     }
     
     
-    let node = worker::PSLWorker::<worker::engines::AbortableKVSTask>::mew(cfg, client_request_tx, client_request_rx);
+    let node = worker::PSLWorker::<worker::engines::LiteTask>::mew(cfg, client_request_tx, client_request_rx);
 
     NodeType::Worker(node)
 }

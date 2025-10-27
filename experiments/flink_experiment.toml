@@ -75,28 +75,8 @@ client_max_retry = 10
 request_config = "Blanks"
 max_concurrent_requests = 16
 
-# [[experiments]]
-# name = "flink"
-# repeats = 1
-# num_storage_nodes = 3
-# num_sequencer_nodes = 1
-# node_distribution = "tag:worker"
-# storage_distribution = "uniform"
-# sequencer_distribution = "uniform"
-# num_clients = 1
-# type = "flink"
-# build_command = "make"
-# duration = 60
-
-# [experiments.client_config]
-# psl_enabled = true
-
-# [experiments.sweeping_parameters]
-# # num_nodes = [1, 2, 4, 8, 16]
-# num_nodes = [1]
-
 [[experiments]]
-name = "flink_no_psl"
+name = "flink"
 repeats = 1
 num_storage_nodes = 3
 num_sequencer_nodes = 1
@@ -109,11 +89,31 @@ build_command = "make"
 duration = 60
 
 [experiments.client_config]
-psl_enabled = false
+psl_enabled = true
 
 [experiments.sweeping_parameters]
 # num_nodes = [1, 2, 4, 8, 16]
 num_nodes = [1]
+
+# [[experiments]]
+# name = "flink_no_psl"
+# repeats = 1
+# num_storage_nodes = 3
+# num_sequencer_nodes = 1
+# node_distribution = "tag:worker"
+# storage_distribution = "uniform"
+# sequencer_distribution = "uniform"
+# num_clients = 1
+# type = "flink"
+# build_command = "make"
+# duration = 60
+
+# [experiments.client_config]
+# psl_enabled = false
+
+# [experiments.sweeping_parameters]
+# # num_nodes = [1, 2, 4, 8, 16]
+# num_nodes = [1]
 
 [[results]]
 name = "flink_results_parse"
