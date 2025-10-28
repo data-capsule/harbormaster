@@ -449,7 +449,7 @@ class FlinkExperiment(Experiment):
             v["worker_config"]["all_worker_list"] = worker_names[:]
 
             if k in worker_names:
-                v["worker_config"]["storage_list"] = []
+                v["worker_config"]["storage_list"] = storage_names[:]
             else:
                 v["worker_config"]["storage_list"] = storage_names[:] 
             v["worker_config"]["sequencer_list"] = sequencer_names[:]
@@ -649,6 +649,7 @@ class FlinkExperiment(Experiment):
                 f"  -p {self.num_nodes} \\",
                 f"  -c com.example.dedup.DedupRefCountBenchmark \\",
                 f"  /home/psladmin/flink-psl/build-target/lib/flink-dedup-bench-1.16.3.jar > {self.remote_workdir}/logs/{repeat_num}/flink.log 2> {self.remote_workdir}/logs/{repeat_num}/flink.err",
+                "sleep 30",
             ])
             
             script_lines.extend([
