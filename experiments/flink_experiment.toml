@@ -39,9 +39,9 @@ self_reads_max_batch_size = 1000
 batch_max_delay_ms = 1000
 signature_max_delay_ms = 20000
 signature_max_delay_blocks = 50
-num_crypto_workers = 3
-num_worker_threads_per_worker = 1
-num_replier_threads_per_worker = 2
+num_crypto_workers = 8
+num_worker_threads_per_worker = 4
+num_replier_threads_per_worker = 4
 read_cache_size = 1
 heartbeat_max_delay_ms = 60_000_000
 
