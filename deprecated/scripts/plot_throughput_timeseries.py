@@ -8,13 +8,13 @@ import numpy as np
 import re
 import click
 
-# Sample: [WARN][pft::consensus::steady_state][2024-11-12T14:22:57.240051-08:00] Equivocated on block 5000, Partitions: ["node2"] ["node3", "node4"]
+# Sample: [WARN][psl::consensus::steady_state][2024-11-12T14:22:57.240051-08:00] Equivocated on block 5000, Partitions: ["node2"] ["node3", "node4"]
 equivocate_rgx = re.compile(r"\[WARN\]\[.*\]\[(.*)\] Equivocated on block .*")
 
-# Sample: [INFO][pft::consensus::handler][2024-11-12T14:23:04.049113-08:00] Processing view change for view 2 from node3
+# Sample: [INFO][psl::consensus::handler][2024-11-12T14:23:04.049113-08:00] Processing view change for view 2 from node3
 revolt_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Processing view change for view .* from .*")
 
-# Sample: [INFO][pft::consensus::handler][2024-11-12T14:23:04.049113-08:00] Moved to new view 2 with leader node2
+# Sample: [INFO][psl::consensus::handler][2024-11-12T14:23:04.049113-08:00] Moved to new view 2 with leader node2
 moved_view_rgx = re.compile(r"\[WARN\]\[.*\]\[(.*)\] Moved to new view .* with leader.*")
 
 stable_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] View stabilised.*")

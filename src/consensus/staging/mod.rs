@@ -1,12 +1,11 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, io::Error, pin::Pin, sync::Arc, time::Duration};
 
-use futures::{future::BoxFuture, stream::FuturesOrdered, StreamExt as _};
-use log::{debug, error, info, trace, warn};
+use log::{trace, warn};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::{ProtoQuorumCertificate, ProtoSignatureArrayEntry, ProtoVote}, rpc::{client::PinnedClient, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer, PerfCounter, StorageAck}};
 
-use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, extra_2pc::{EngraftActionAfterFutureDone, EngraftTwoPCFuture, TwoPCCommand}, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::{self, LogServerCommand}, pacemaker::PacemakerCommand};
+use super::{app::AppCommand, batch_proposal::BatchProposerCommand, block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::{AppendEntriesStats, ForkReceiverCommand}, logserver::LogServerCommand, pacemaker::PacemakerCommand};
 
 pub(super) mod steady_state;
 pub(super) mod view_change;
@@ -130,7 +129,7 @@ impl Staging {
             &leader_staging_event_order,
         ));
 
-        let mut ret = Self {
+        let ret = Self {
             config,
             client,
             crypto,

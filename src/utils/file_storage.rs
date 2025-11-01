@@ -1,6 +1,5 @@
-use std::{fmt::Debug, fs::{create_dir, exists}, io::Error, sync::Mutex};
+use std::{fmt::Debug, fs::{create_dir, exists}, io::Error};
 
-use indexmap::IndexMap;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 
 use crate::config::{FileStorageConfig, StorageConfig};
@@ -102,6 +101,10 @@ impl StorageEngine for FileStorageEngine {
     fn init(&mut self) {
         // mkdir -p db_path
         self.create_dir_if_not_exists(&self.config.db_path);
+    }
+
+    fn id(&self) -> String {
+        "file".to_string()
     }
 
     fn destroy(&self) {

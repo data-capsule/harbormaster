@@ -21,6 +21,10 @@ pub use perf::*;
 
 pub mod timer;
 
+pub mod cache;
+
+pub mod types;
+
 
 pub mod channel {
     mod channel_tokio {
@@ -92,6 +96,9 @@ pub mod channel {
             }
 
 
+            pub fn len(&self) -> usize {
+                self.0.len()
+            }
         }
 
 

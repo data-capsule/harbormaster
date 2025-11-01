@@ -2,7 +2,7 @@ use rand::{thread_rng, Rng};
 
 use crate::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase, ProtoTransactionResult};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
+use super::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode};
 
 pub struct BlankWorkloadGenerator { }
 
@@ -29,7 +29,9 @@ impl PerWorkerWorkloadGenerator for BlankWorkloadGenerator {
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader
+            executor: Executor::Leader,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         }
     }
     

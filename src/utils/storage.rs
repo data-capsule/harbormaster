@@ -1,11 +1,14 @@
-use rocksdb::{DBCompactionStyle, FifoCompactOptions, Options, UniversalCompactOptions, WriteBatchWithTransaction, WriteOptions, DB};
+use dashmap::DashMap;
+use hashbrown::HashMap;
+use rocksdb::{DBCompactionStyle, Options, WriteBatchWithTransaction, WriteOptions, DB};
 
-use crate::config::{RocksDBConfig, StorageConfig};
+use crate::config::{AtomicConfig, RocksDBConfig, StorageConfig};
 use std::{fmt::Debug, io::{Error, ErrorKind}};
 
 pub trait StorageEngine: Debug + Sync + Send {
     fn init(&mut self);
     fn destroy(&self);
+    fn id(&self) -> String;
 
     /// Can't trust the storage to handle anything more than block hashes
     fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error>;
@@ -34,6 +37,23 @@ impl RocksDBStorageEngine {
             opts.set_allow_mmap_reads(true);
             opts.set_allow_mmap_writes(true);
 
+            // opts.create_if_missing(true);
+            // opts.set_write_buffer_size(config.write_buffer_size);
+            // opts.set_max_write_buffer_number(config.max_write_buffer_number);
+            // opts.set_min_write_buffer_number_to_merge(config.max_write_buffers_to_merge);
+            // opts.set_target_file_size_base(config.write_buffer_size as u64);
+            // opts.set_level_zero_file_num_compaction_trigger(10);
+            // opts.set_level_zero_slowdown_writes_trigger(20);
+            // opts.set_level_zero_stop_writes_trigger(40);
+            // opts.set_max_bytes_for_level_base(8 * config.write_buffer_size as u64);
+            // opts.set_max_background_jobs(1);
+            // opts.set_memtable_prefix_bloom_ratio(0.125);
+
+            // opts.set_manual_wal_flush(true);
+            // opts.set_compaction_style(DBCompactionStyle::Level);
+            // opts.set_allow_mmap_reads(true);
+            // opts.set_allow_mmap_writes(true);
+
             // opts.increase_parallelism(3);
 
             let path = config.db_path.clone();
@@ -50,6 +70,10 @@ impl RocksDBStorageEngine {
 impl StorageEngine for RocksDBStorageEngine {
     fn init(&mut self) {
         // This does nothing for RocksDBStorageEngine, since it is already created when new() is called.
+    }
+
+    fn id(&self) -> String {
+        "rocksdb".to_string()
     }
 
     fn destroy(&self) {
@@ -126,3 +150,116 @@ impl StorageEngine for RocksDBStorageEngine {
     }
 }
 
+
+#[derive(Debug)]
+pub struct BlackHoleStorageEngine {
+}
+
+
+impl StorageEngine for BlackHoleStorageEngine {
+    fn init(&mut self) {
+        // This does nothing for BlackHoleStorageEngine, since it is already created when new() is called.
+    }
+
+    fn destroy(&self) {
+        // This does nothing for BlackHoleStorageEngine, since it is already created when new() is called.
+    } 
+
+    fn id(&self) -> String {
+        "blackhole".to_string()
+    }
+
+    fn put_block(&self, _block_ser: &Vec<u8>, _block_hash: &Vec<u8>) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn put_multiple_blocks(&self, _blocks: &Vec<(Vec<u8> /* block_ser */, Vec<u8> /* block_hash */)>) -> Result<(), Error> {
+        Ok(())
+    }
+    
+    fn get_block(&self, _block_hash: &Vec<u8>) -> Result<Vec<u8>, Error> {
+        Err(Error::new(ErrorKind::InvalidInput, "Key not found"))
+    }
+}
+
+pub struct RemoteStorageEngine {
+    pub config: AtomicConfig,
+}
+
+impl std::fmt::Debug for RemoteStorageEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RemoteStorageEngine")
+    }
+}
+
+
+impl StorageEngine for RemoteStorageEngine {
+    fn init(&mut self) {
+        // This does nothing for RemoteStorageEngine, since it is already created when new() is called.
+    }
+
+    fn destroy(&self) {
+        // This does nothing for BlackHoleStorageEngine, since it is already created when new() is called.
+    }
+
+    fn id(&self) -> String {
+        "remote".to_string()
+    }
+
+    fn put_block(&self, _block_ser: &Vec<u8>, _block_hash: &Vec<u8>) -> Result<(), Error> {
+        panic!("Remote Storage Engine is read only");
+    }
+
+    fn put_multiple_blocks(&self, _blocks: &Vec<(Vec<u8> /* block_ser */, Vec<u8> /* block_hash */)>) -> Result<(), Error> {
+        panic!("Remote Storage Engine is read only");
+    }
+    
+    fn get_block(&self, _block_hash: &Vec<u8>) -> Result<Vec<u8>, Error> {
+        // TODO: Implement this
+        Err(Error::new(ErrorKind::InvalidInput, "Key not found"))
+    }
+}
+
+#[derive(Debug)]
+pub struct InMemoryStorageEngine {
+    db: DashMap<Vec<u8>, Vec<u8>>,
+}
+
+impl InMemoryStorageEngine {
+    pub fn new() -> Self {
+        Self { db: DashMap::new() }
+    }
+}
+
+impl StorageEngine for InMemoryStorageEngine {
+    fn init(&mut self) {
+        // This does nothing for InMemoryStorageEngine, since it is already created when new() is called.
+    }
+
+    fn destroy(&self) {
+        // This does nothing for InMemoryStorageEngine, since it is already created when new() is called.
+    }
+
+    fn id(&self) -> String {
+        "inmemory".to_string()
+    }
+
+    fn put_block(&self, block_ser: &Vec<u8>, block_hash: &Vec<u8>) -> Result<(), Error> {
+        self.db.insert(block_hash.clone(), block_ser.clone());
+        Ok(())
+    }
+
+    fn put_multiple_blocks(&self, blocks: &Vec<(Vec<u8> /* block_ser */, Vec<u8> /* block_hash */)>) -> Result<(), Error> {
+        for (block_ser, block_hash) in blocks {
+            self.db.insert(block_hash.clone(), block_ser.clone());
+        }
+        Ok(())
+    }
+    
+    fn get_block(&self, block_hash: &Vec<u8>) -> Result<Vec<u8>, Error> {
+        match self.db.get(block_hash) {
+            Some(block_ser) => Ok(block_ser.clone()),
+            None => Err(Error::new(ErrorKind::InvalidInput, "Key not found")),
+        }
+    }
+}

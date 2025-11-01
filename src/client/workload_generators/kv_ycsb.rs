@@ -1,14 +1,14 @@
-use std::{process::exit, time::Instant};
 
 use log::info;
-use rand::distributions::{Uniform, WeightedIndex};
+use rand::{distr::{weighted::WeightedIndex, Uniform}, rng};
 use rand_chacha::ChaCha20Rng;
 use rand::prelude::*;
-use zipf::ZipfDistribution;
+use rand::distr::Distribution as _;
+use rand_distr::Zipf;
 
 use crate::{config::KVReadWriteYCSB, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-use super::{PerWorkerWorkloadGenerator, WorkloadUnit, Executor};
+use super::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode};
 
 /// This is enough for YCSB-A, B, C
 #[derive(Clone)]
@@ -46,7 +46,7 @@ pub struct KVReadWriteYCSBGenerator {
     crash_byz_weights: [(TxPhaseType, i32); 2],
     crash_byz_dist: WeightedIndex<i32>,
 
-    key_selection_dist: ZipfDistribution,
+    key_selection_dist: Zipf<f64>,
 
     val_gen_dist: Uniform<u8>,
     
@@ -57,7 +57,8 @@ pub struct KVReadWriteYCSBGenerator {
 
 impl KVReadWriteYCSBGenerator {
     pub fn new(config: &KVReadWriteYCSB, client_idx: usize, total_clients: usize) -> KVReadWriteYCSBGenerator {
-        let rng = ChaCha20Rng::from_entropy();
+        let seed: [u8; 32] = rng().random();
+        let rng = ChaCha20Rng::from_seed(seed);
 
         let read_write_weights = [
             (TxOpType::Read, (config.read_ratio * 1000.0) as i32),
@@ -82,9 +83,9 @@ impl KVReadWriteYCSBGenerator {
         let read_write_dist = WeightedIndex::new(read_write_weights.iter().map(|(_, weight)| weight)).unwrap();
         let crash_byz_dist = WeightedIndex::new(crash_byz_weights.iter().map(|(_, weight)| weight)).unwrap();
         
-        let key_selection_dist = ZipfDistribution::new(config.num_keys, config.zipf_exponent).unwrap();
+        let key_selection_dist = Zipf::new(config.num_keys as f64, config.zipf_exponent).unwrap();
         
-        let val_gen_dist = Uniform::new('a' as u8, 'z' as u8);
+        let val_gen_dist = Uniform::new('a' as u8, 'z' as u8).unwrap();
         KVReadWriteYCSBGenerator {
             config: config.clone(),
             rng,
@@ -110,9 +111,9 @@ impl KVReadWriteYCSBGenerator {
     }
 
     fn get_next_val(&mut self) -> Vec<u8> {
-        (0..self.config.val_size)
-            .map(|_| self.val_gen_dist.sample(&mut self.rng))
-            .collect()
+        let mut payload = vec![0u8; self.config.val_size];
+        self.rng.fill(&mut payload[..]);
+        payload
     }
 
     fn transform_key_num(&self, key_num: usize) -> usize {
@@ -127,7 +128,7 @@ impl KVReadWriteYCSBGenerator {
     }
 
     fn get_next_key(&mut self) -> String {
-        let key_num = self.key_selection_dist.sample(&mut self.rng);
+        let key_num = self.key_selection_dist.sample(&mut self.rng) as usize;
         let key_num = self.transform_key_num(key_num);
 
         self.get_key_str_from_num(key_num)
@@ -156,15 +157,17 @@ impl KVReadWriteYCSBGenerator {
 
         WorkloadUnit {
             tx: ProtoTransaction {
-                on_receive: None,
-                on_crash_commit: Some(ProtoTransactionPhase {
+                on_crash_commit: None,
+                on_receive: Some(ProtoTransactionPhase {
                     ops,
                 }),
                 on_byzantine_commit: None,
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader
+            executor: Executor::Any, // For PSL, any node should be able to handle the request
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         }
     }
 
@@ -253,46 +256,63 @@ impl KVReadWriteYCSBGenerator {
         }
     }
 
+    fn update_receive_next(&mut self) -> ProtoTransaction {
+        let ops = self.update_next();
+        ProtoTransaction {
+            on_receive: Some(ops),
+            on_crash_commit: None,
+            on_byzantine_commit: None,
+            is_reconfiguration: false,
+            is_2pc: false,
+        }
+    }
+
     fn run_phase_next(&mut self) -> WorkloadUnit {
         let next_op = self.read_write_weights[self.read_write_dist.sample(&mut self.rng)].0.clone();
 
         let tx = match next_op {
             TxOpType::Read => {
                 self.last_request_type = TxOpType::Read;
-                if self.config.linearizable_reads {
-                    let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
-                    match crash_or_byz {
-                        TxPhaseType::Crash => self.read_crash_next(),
-                        TxPhaseType::Byz => self.read_byz_next(),
-                    }
-                } else {
-                    self.read_unlogged_next()
-                }
+                // if self.config.linearizable_reads {
+                //     let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
+                //     match crash_or_byz {
+                //         TxPhaseType::Crash => self.read_crash_next(),
+                //         TxPhaseType::Byz => self.read_byz_next(),
+                //     }
+                // } else {
+                //     self.read_unlogged_next()
+                // }
+                self.read_unlogged_next()
 
             },
             TxOpType::Update => {
                 self.last_request_type = TxOpType::Update;
-                let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
-                    match crash_or_byz {
-                        TxPhaseType::Crash => self.update_crash_next(),
-                        TxPhaseType::Byz => self.update_byz_next(),
-                    }
+                // let crash_or_byz = &self.crash_byz_weights[self.crash_byz_dist.sample(&mut self.rng)].0;
+                //     match crash_or_byz {
+                //         TxPhaseType::Crash => self.update_crash_next(),
+                //         TxPhaseType::Byz => self.update_byz_next(),
+                //     }
+                self.update_receive_next()
             },
         };
 
-        let executor = match next_op {
-            TxOpType::Read => {
-                if self.config.linearizable_reads {
-                    Executor::Leader
-                } else {
-                    Executor::Any
-                }
-            },
-            TxOpType::Update => Executor::Leader,
-        };
+        // let executor = match next_op {
+        //     TxOpType::Read => {
+        //         if self.config.linearizable_reads {
+        //             Executor::Leader
+        //         } else {
+        //             Executor::Any
+        //         }
+        //     },
+        //     TxOpType::Update => Executor::Leader,
+        // };
+
+        let executor = Executor::Any; // For PSL, any node should be able to handle the request
 
         WorkloadUnit {
-            tx, executor
+            tx, executor,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         }
 
     }

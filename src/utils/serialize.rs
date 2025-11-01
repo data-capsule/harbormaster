@@ -2,7 +2,7 @@ use std::io::{Error, ErrorKind};
 
 use bytes::BytesMut;
 use ed25519_dalek::SIGNATURE_LENGTH;
-use prost::{DecodeError, EncodeError, Message};
+use prost::{DecodeError, Message};
 
 use crate::{crypto::{HashType, DIGEST_LENGTH}, proto::consensus::{DefferedSignature, ProtoBlock}};
 

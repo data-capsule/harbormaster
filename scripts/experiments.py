@@ -22,15 +22,24 @@ class Experiment:
     repeats: int
     duration: int
     num_nodes: int
+    num_storage_nodes: int # This is only used for PSLStorageExperiment
+    num_sequencer_nodes: int # This is only used for PSLStorageExperiment
+
     num_clients: int
     base_node_config: dict
     base_client_config: dict
+
     node_distribution: str
+    storage_distribution: str # This is only used for PSLStorageExperiment
+    sequencer_distribution: str # This is only used for PSLStorageExperiment
+
     client_region: int
     build_command: str
     git_hash_override: str
     project_home: str
     controller_must_run: bool
+
+    data_dir: str
 
 
     def done(self):
@@ -113,6 +122,8 @@ class Experiment:
             vms = deployment.get_nodes_with_tee("tdx")
         elif self.node_distribution == "nontee_only":
             vms = deployment.get_nodes_with_tee("nontee")
+        elif self.node_distribution.startswith("tag:"):
+            vms = deployment.get_nodes_with_tag(self.node_distribution.split(":")[1])
         else:
             vms = deployment.get_wan_setup(self.node_distribution)
         
@@ -142,8 +153,9 @@ class Experiment:
             config = deepcopy(self.base_node_config)
             config["net_config"]["name"] = name
             config["net_config"]["addr"] = listen_addr
-            # config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"{log_dir}/{name}-db"
-            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = f"/data/{name}-db"
+
+            data_dir = os.path.join(self.data_dir, f"{name}-db")
+            config["consensus_config"]["log_storage_config"]["RocksDB"]["db_path"] = str(data_dir)
 
 
             node_configs[name] = config
@@ -180,6 +192,7 @@ class Experiment:
         num_clients_per_vm = [self.num_clients // len(client_vms) for _ in range(len(client_vms))]
         num_clients_per_vm[-1] += (self.num_clients - sum(num_clients_per_vm))
 
+        client_start_index = 0
         for client_num in range(len(client_vms)):
             config = deepcopy(self.base_client_config)
             client = "client" + str(client_num + 1)
@@ -194,6 +207,8 @@ class Experiment:
 
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
             config["workload_config"]["duration"] = self.duration
+            config["workload_config"]["start_index"] = client_start_index
+            client_start_index += num_clients_per_vm[client_num]
 
             self.binary_mapping[client_vms[client_num]].append(client)
 
@@ -394,6 +409,17 @@ sleep 60
             diff = f.read().strip()
         
         return git_hash, diff, self.build_command
+    
+
+    def deploy_only_configs(self, deployment: Deployment):
+        workdir = os.path.join(deployment.workdir, "experiments", self.name)
+        build_dir, config_dir, log_dir_base, log_dirs = self.create_directory(workdir)
+        self.tag_source(workdir)
+        self.tag_experiment(workdir)
+        self.dev_vm = deployment.dev_vm
+        self.dev_ssh_user = deployment.ssh_user
+        self.dev_ssh_key = deployment.ssh_key
+        self.generate_configs(deployment, config_dir, log_dir_base)
 
 
     def deploy(self, deployment: Deployment, last_git_hash="", last_git_diff="", last_build_command=""):

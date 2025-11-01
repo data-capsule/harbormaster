@@ -1,16 +1,14 @@
-use std::{io::{BufReader, Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
-
+use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::{atomic::fence, Arc}};
+use rand::prelude::*;
 use bytes::{BufMut, BytesMut};
 use ed25519_dalek::{verify_batch, Signature, SIGNATURE_LENGTH};
-use futures::SinkExt;
-use itertools::min;
-use log::{info, trace, warn};
+use log::{trace, warn};
 use prost::Message;
-use rand::{thread_rng, Rng};
-use sha2::{Digest, Sha256, Sha512};
+use rand::Rng;
+use sha2::{Digest, Sha512};
 use tokio::{sync::{mpsc::{channel, Receiver, Sender}, oneshot}, task::JoinSet};
 
-use crate::{config::AtomicConfig, consensus::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, utils::{deserialize_proto_block, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
+use crate::{config::AtomicConfig, consensus::fork_receiver::{AppendEntriesStats, MultipartFork}, crypto::{default_hash, DIGEST_LENGTH}, proto::consensus::{HalfSerializedBlock, ProtoBlock, ProtoQuorumCertificate, ProtoViewChange}, rpc::SenderType, utils::{deserialize_proto_block, get_parent_hash_in_proto_block_ser, serialize_proto_block_nascent, update_parent_hash_in_proto_block_ser, update_signature_in_proto_block_ser, PerfCounter}};
 
 use super::{hash, AtomicKeyStore, HashType, KeyStore};
 
@@ -47,7 +45,7 @@ impl CachedBlock {
 }
 
 // But no DerefMut, I don't want to allow mutation of the inner block.
-
+#[derive(Debug)]
 pub enum FutureHash {
     None,
     Immediate(HashType),
@@ -125,6 +123,10 @@ enum CryptoServiceCommand {
     // For View Change prep/verification
     PrepareVC(ProtoViewChange, oneshot::Sender<ProtoViewChange>),
     VerifyVC(ProtoViewChange, String /* Signer name */, oneshot::Sender<bool>),
+
+
+    // For Simple AppendEntries without QCs
+    VerifyAndPrepareBlockSimple(Vec<u8> /* block_ser */, FutureHash /* parent */, SenderType /* sender */, oneshot::Sender<Result<CachedBlock, Error>>, oneshot::Sender<Result<HashType, Error>>, oneshot::Sender<HashType> /* return FutureHash */, bool /* check_parent_hash */),
     
     Die
 }
@@ -144,6 +146,17 @@ pub struct CryptoServiceConnector {
     round_robin: usize,
     num_tasks: usize,
 }
+
+impl Clone for CryptoServiceConnector {
+    fn clone(&self) -> Self {
+        let cmd_txs = self.cmd_txs.iter().map(|tx| tx.clone()).collect();
+        let round_robin: u64 = rand::rng().random();
+        let num_tasks = self.num_tasks;
+        Self { cmd_txs, round_robin: round_robin as usize, num_tasks }
+    }
+}
+
+
 
 
 impl CryptoService {
@@ -422,6 +435,94 @@ impl CryptoService {
                     let res = keystore.get().verify(&name, vc.fork_sig.as_slice().try_into().unwrap(), buf.to_vec().as_slice());
                     tx.send(res).unwrap();
                 }
+            
+                CryptoServiceCommand::VerifyAndPrepareBlockSimple(block_ser, parent_hash, sender, block_tx, hash_tx, return_parent_hash, check_parent_hash) => {
+                    let _parent_hash = if check_parent_hash {
+                        match parent_hash {
+                            FutureHash::None => default_hash(),
+                            FutureHash::Immediate(val) => val,
+                            FutureHash::Future(receiver) => receiver.await.unwrap(),
+                            FutureHash::FutureResult(receiver) => {
+                                let resp = receiver.await.unwrap();
+                                match resp {
+                                    Ok(hsh) => hsh,
+                                    Err(e) => {
+                                        panic!("Hash chain error: {} from {:?}", e, sender);
+                                        block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid parent hash"))).unwrap();
+                                        hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid parent hash")));
+                                        return_parent_hash.send(default_hash());
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        default_hash()
+                    };
+                    
+                    let block_parent_hash = get_parent_hash_in_proto_block_ser(block_ser.as_ref());
+                    // Hash parent check
+                    if check_parent_hash {
+                        if block_parent_hash.is_none() || !block_parent_hash.unwrap().eq(&_parent_hash) {
+                            block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid parent hash"))).unwrap();
+                            hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid parent hash")));
+                            return_parent_hash.send(_parent_hash);
+                            continue;
+                        }
+                    }
+                    return_parent_hash.send(_parent_hash);
+                    
+                    let block = deserialize_proto_block(block_ser.as_ref());
+                    let hsh = if check_parent_hash {
+                        hash_proto_block_ser(&block_ser)
+                    } else {
+                        default_hash()
+                    };
+
+                    if block.is_err() {
+                        block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error"))).unwrap();
+                        hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Decode error")));
+                        continue;
+                    }
+
+
+                    let block = block.unwrap();
+
+                    if let Some(crate::proto::consensus::proto_block::Sig::ProposerSig(sig)) = &block.sig {
+                        let partial_hsh = hash(&block_ser[SIGNATURE_LENGTH..]);
+                        let keystore = keystore.get();
+
+                        let sender_name = match sender {
+                            SenderType::Anon => {
+                                panic!("Anonymous sender")
+                            },
+                            SenderType::Auth(name, _) => name
+                        };
+
+                        let _sig = sig.as_slice().try_into();
+                        match _sig {
+                            Ok(_sig) => {
+                                if !keystore.verify(&sender_name, &_sig, &partial_hsh) {
+                                    warn!("Invalid signature");
+                                    block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
+                                    hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature")));
+                                    
+                                    continue;
+                                }
+                            },
+                            Err(_) => {
+                                block_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature"))).unwrap();
+                                hash_tx.send(Err(Error::new(ErrorKind::InvalidData, "Invalid signature")));
+
+                                continue;
+                            }
+                        }
+
+                    }
+
+                    block_tx.send(Ok(CachedBlock::new(block, block_ser, hsh.clone()))).unwrap();
+                    hash_tx.send(Ok(hsh));
+                }
             }
         }
 
@@ -441,9 +542,10 @@ impl CryptoService {
     }
 
     pub fn get_connector(&self) -> CryptoServiceConnector {
+        let round_robin: u64 = rand::rng().random();
         CryptoServiceConnector {
             cmd_txs: self.cmd_txs.iter().map(|e| e.clone()).collect(),
-            round_robin: thread_rng().gen(),
+            round_robin: round_robin as usize,
             num_tasks: self.num_tasks
         }
     }
@@ -555,6 +657,19 @@ impl CryptoServiceConnector {
 
     pub async fn prepare_vc(&mut self, vc: ProtoViewChange) -> ProtoViewChange {
         dispatch_cmd!(self, CryptoServiceCommand::PrepareVC, vc)
+    }
+
+    pub async fn verify_and_prepare_block_simple(&mut self, block_ser: Vec<u8>, parent_hash: FutureHash, sender: SenderType, check_parent_hash: bool) -> (
+        oneshot::Receiver<Result<CachedBlock, Error>>,
+        FutureHash /* hash of this block */,
+        FutureHash /* returned parent hash */,
+    ) {
+        let (block_tx, block_rx) = oneshot::channel();
+        let (hash_tx, hash_rx) = oneshot::channel();
+        let (return_parent_hash_tx, return_parent_hash_rx) = oneshot::channel();
+        self.dispatch(CryptoServiceCommand::VerifyAndPrepareBlockSimple(block_ser, parent_hash, sender, block_tx, hash_tx, return_parent_hash_tx, check_parent_hash)).await;
+
+        (block_rx, FutureHash::FutureResult(hash_rx), FutureHash::Future(return_parent_hash_rx))
     }
 
 }

@@ -1,12 +1,12 @@
 // Copyright (c) Shubham Mishra. All rights reserved.
 // Licensed under the MIT License.
 
-use std::{collections::HashMap, fs::File, future::Future, io::{self, Cursor, Error}, path, sync::{atomic::AtomicBool, Arc}, time::{Duration, Instant}};
+use std::{collections::HashMap, fs::File, future::Future, io::{self, Cursor, Error}, path, sync::Arc, time::{Duration, Instant}};
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, rpc::auth, utils::AtomicStruct};
 use indexmap::IndexMap;
-use tokio::{io::{BufWriter, ReadHalf}, sync::{mpsc, oneshot}};
-use log::{debug, info, trace, warn};
+use tokio::{io::{BufWriter, ReadHalf}, sync::mpsc};
+use log::{debug, error, info, trace, warn};
 use rustls::{
     crypto::aws_lc_rs,
     pki_types::{CertificateDer, PrivateKeyDer},
@@ -326,8 +326,9 @@ where
             BufWriter::new(_tx)
         };
         let mut rx_buf = FrameReader::new(rx);
-        let (ack_tx, mut ack_rx) = mpsc::channel(1000);
-        let (resp_tx, mut resp_rx) = mpsc::channel(1000);
+        let _chan_depth = server.config.get().rpc_config.channel_depth as usize;
+        let (ack_tx, mut ack_rx) = mpsc::channel(_chan_depth);
+        let (resp_tx, mut resp_rx) = mpsc::channel(_chan_depth);
         
         let server2 = server.clone();
         let hndl = tokio::spawn(async move {
@@ -335,6 +336,7 @@ where
                 if let Ok(RespType::Resp) = resp {            
                     debug!("Waiting for response!");
                     let mref: (PinnedMessage, LatencyProfile) = some_or_exit!(ack_rx.recv().await);
+                    // mref.1.force_print();
                     let mref = mref.0.as_ref();
                     if let Err(_) = tx_buf.write_u32(mref.1 as u32).await { break; }
                     if let Err(_) = tx_buf.write_all(&mref.0[..mref.1]).await { break; };
@@ -454,31 +456,43 @@ where
         let mut parked_streams = HashMap::new();
 
         loop {
-            let (socket, addr) = listener.accept().await?;
-            socket.set_nodelay(true)?;
-            let acceptor = tls_acceptor.clone();
-            let server_ = server.clone();
-            let mut stream = acceptor.accept(socket).await?;
-            let (sender, is_reply_chan, client_sub_id) = Self::handle_auth(server.clone(), &mut stream, addr).await?;
-            
-            let map_name = sender.to_string() + "#" + &client_sub_id.to_string();
-            
-            if is_reply_chan {
-                parked_streams.insert(map_name, stream);
-                continue;
+            let res = Self::server_main_loop(&listener, &tls_acceptor, server.clone(), &mut parked_streams).await;
+            if let Err(e) = res {
+                error!("Error in server main loop: {}", e);
             }
-
-            let stream_out = parked_streams.remove(&map_name);
-            // It is cheap to open a lot of green threads in tokio
-            // No need to have a list of sockets to select() from.
-            tokio::spawn(async move {
-                Self::handle_stream(server_, stream, stream_out, addr, sender.clone()).await?;
-                // if let Some(stream_out) = ret {
-                //     let stream = acceptor.accept(socket).await?;
-                //     Self::handle_stream(server_, stream, Some(stream_out), addr).await?;
-                // }
-                Ok(()) as io::Result<()>
-            });
         }
+    }
+
+    async fn server_main_loop(listener: &TcpListener, tls_acceptor: &TlsAcceptor, server: Arc<Self>, parked_streams: &mut HashMap<String, TlsStream<TcpStream>>) -> io::Result<()> {
+        let (socket, addr) = listener.accept().await?;
+        socket.set_nodelay(true)?;
+        let acceptor = tls_acceptor.clone();
+        let server_ = server.clone();
+        let mut stream = acceptor.accept(socket).await?;
+        let (sender, is_reply_chan, client_sub_id) = Self::handle_auth(server.clone(), &mut stream, addr).await?;
+        
+        let map_name = sender.to_string() + "#" + &client_sub_id.to_string();
+        
+        if is_reply_chan {
+            parked_streams.insert(map_name, stream);
+            return Ok(());
+        }
+
+        let stream_out = parked_streams.remove(&map_name);
+        // It is cheap to open a lot of green threads in tokio
+        // No need to have a list of sockets to select() from.
+        tokio::spawn(async move {
+            let res = Self::handle_stream(server_, stream, stream_out, addr, sender.clone()).await;
+            if let Err(e) = res {
+                error!("Error handling stream: {}", e);
+            }
+            // if let Some(stream_out) = ret {
+            //     let stream = acceptor.accept(socket).await?;
+            //     Self::handle_stream(server_, stream, Some(stream_out), addr).await?;
+            // }
+            Ok(()) as io::Result<()>
+        });
+
+        Ok(())
     }
 }

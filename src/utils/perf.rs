@@ -3,7 +3,6 @@ use std::cmp::Eq;
 use std::hash::Hash;
 
 use indexmap::IndexMap;
-use log::info;
 
 #[derive(Debug, Clone)]
 struct PerfEntry {

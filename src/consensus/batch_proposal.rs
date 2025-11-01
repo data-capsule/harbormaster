@@ -3,12 +3,11 @@ use std::time::Instant;
 use std::{io::Error, pin::Pin, sync::Arc, time::Duration};
 
 use std::io::ErrorKind;
-use log::{info, warn};
+use log::warn;
 use prost::Message as _;
 use crate::config::NodeInfo;
 use crate::proto::client::{ProtoClientReply, ProtoCurrentLeader};
 use crate::proto::execution::ProtoTransactionResult;
-use crate::proto::rpc::ProtoPayload;
 use crate::rpc::server::LatencyProfile;
 use crate::rpc::{PinnedMessage, SenderType};
 use crate::utils::channel::{Sender, Receiver};
@@ -17,7 +16,6 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::{config::AtomicConfig, utils::timer::ResettableTimer, proto::execution::ProtoTransaction, rpc::server::MsgAckChan};
 
-use super::app::AppCommand;
 use super::client_reply::ClientReplyCommand;
 
 pub type RawBatch = Vec<ProtoTransaction>;

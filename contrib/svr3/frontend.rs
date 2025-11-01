@@ -4,7 +4,7 @@ use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use chrono::{DateTime, TimeZone};
 use hex::ToHex;
 use log::{debug, warn};
-use pft::consensus::batch_proposal::TxWithAckChanTag;
+use psl::consensus::batch_proposal::TxWithAckChanTag;
 use prost::Message;
 use serde::ser::Error;
 use serde_json::value;
@@ -15,12 +15,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use pft::config::Config;
-use pft::crypto::{KeyStore, hash};
-use pft::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
-use pft::rpc::client::Client;
-use pft::rpc::{PinnedMessage, SenderType};
-use pft::{proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
+use psl::config::Config;
+use psl::crypto::{KeyStore, hash};
+use psl::proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionPhase};
+use psl::rpc::client::Client;
+use psl::rpc::{PinnedMessage, SenderType};
+use psl::{proto::{client::{self, ProtoClientReply, ProtoClientRequest}, rpc::ProtoPayload}, rpc::client::PinnedClient, utils::channel::{make_channel, Receiver, Sender}};
 use crate::payloads::{AuthToken, GetTokenPayload, RecoverSecretPayload, RegisterPayload, StoreSecretPayload};
 
 
@@ -46,7 +46,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
     let pin = payload.pin.clone();
 
     let transaction_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        op_type: psl::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
     };
 
@@ -63,7 +63,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
 
     // Username does not exist; create new username and password.
     let create_user_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+        op_type: psl::proto::execution::ProtoTransactionOpType::Write.into(),
         operands: vec![username.clone().into_bytes(), hash(&pin.into_bytes())],
     };
 
@@ -74,7 +74,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
 
     // Get list of users then add user to list of users.
     let get_user_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        op_type: psl::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec!["user".as_bytes().to_vec()],
     };
 
@@ -92,7 +92,7 @@ async fn auth(payload: web::Json<RegisterPayload>, data: web::Data<AppState>) ->
     let serialized_users: Vec<u8> = serde_json::to_vec(&users).expect("Serialization failed");
 
     let update_users_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Write.into(),
+        op_type: psl::proto::execution::ProtoTransactionOpType::Write.into(),
         operands: vec!["user".as_bytes().to_vec(), serialized_users],
     };
 
@@ -154,7 +154,7 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
         user_retry_count.push_str(&payload.username);
 
         let increment_user_pin_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
+            op_type: psl::proto::execution::ProtoTransactionOpType::Increment.into(),
             operands: vec![user_retry_count.clone().into_bytes()]
         };
 
@@ -179,7 +179,7 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
     } else {
         // Check the pin guess.
         let transaction_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            op_type: psl::proto::execution::ProtoTransactionOpType::Read.into(),
             operands: vec![("retries:".to_string() + &username).into_bytes()],
         };
 
@@ -208,7 +208,7 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
         // Or try to CAS it 0.
         // If it fails, we don't retry.
         let reset_user_pin_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Cas.into(),
+            op_type: psl::proto::execution::ProtoTransactionOpType::Cas.into(),
             operands: vec![("retries:".to_string() + &username).into_bytes(), 0i64.to_be_bytes().to_vec(), total_guesses.to_be_bytes().to_vec()]
         };
 
@@ -223,7 +223,7 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
 
     let version = if payload.increment_version {
         let increment_user_version_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Increment.into(),
+            op_type: psl::proto::execution::ProtoTransactionOpType::Increment.into(),
             operands: vec![("version:".to_string() + &username).into_bytes()]
         };
 
@@ -243,7 +243,7 @@ async fn getToken(payload: web::Json<GetTokenPayload>, data: web::Data<AppState>
     } else {
         // Just read the version.
         let transaction_op = ProtoTransactionOp {
-            op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+            op_type: psl::proto::execution::ProtoTransactionOpType::Read.into(),
             operands: vec![("version:".to_string() + &username).into_bytes()],
         };
 
@@ -320,7 +320,7 @@ async fn home(_data: web::Data<AppState>) -> impl Responder {
     }))
 }
 
-pub async fn run_actix_server(config: Config, batch_proposer_tx: pft::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
+pub async fn run_actix_server(config: Config, batch_proposer_tx: psl::utils::channel::AsyncSenderWrapper<TxWithAckChanTag>, actix_threads: usize) -> std::io::Result<()> {
     let keys = KeyStore::new(&config.rpc_config.allowed_keylist_path, &config.rpc_config.signing_priv_key_path);
     // keys.priv_key = KeyStore::get_privkeys(&config.rpc_config.signing_priv_key_path);
     // let keys = keys.clone();
@@ -413,7 +413,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
     let mut result: Vec<Vec<u8>> = Vec::new();
     let block_n = 
     match decoded_payload.reply.unwrap() {
-        pft::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
+        psl::proto::client::proto_client_reply::Reply::Receipt(receipt) => {
             if let Some(tx_result) = receipt.results {
                 if tx_result.result.is_empty() {
                     return Ok(result);
@@ -441,7 +441,7 @@ async fn send(transaction_ops: Vec<ProtoTransactionOp>, isRead: bool, state: &Ap
         let probe_transaction = ProtoTransaction {
             on_receive: Some(ProtoTransactionPhase {
                 ops: vec![ProtoTransactionOp {
-                    op_type: pft::proto::execution::ProtoTransactionOpType::Probe.into(),
+                    op_type: psl::proto::execution::ProtoTransactionOpType::Probe.into(),
                     operands: vec![block_n.to_be_bytes().to_vec()],
                 }]
             }),
@@ -468,7 +468,7 @@ async fn authenticate_user(
     data: &AppState,
 ) -> Result<(), HttpResponse> {
     let transaction_op = ProtoTransactionOp {
-        op_type: pft::proto::execution::ProtoTransactionOpType::Read.into(),
+        op_type: psl::proto::execution::ProtoTransactionOpType::Read.into(),
         operands: vec![username.clone().into_bytes()],
     };
 

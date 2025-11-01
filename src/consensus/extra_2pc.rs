@@ -1,7 +1,7 @@
 use std::{collections::HashMap, future::Future, sync::Arc};
 
 use bytes::{BufMut as _, BytesMut};
-use log::{error, info, trace, warn};
+use log::{error, trace, warn};
 use prost::Message;
 use tokio::sync::{Mutex, oneshot};
 

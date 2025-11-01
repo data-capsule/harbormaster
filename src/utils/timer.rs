@@ -3,8 +3,7 @@
 
 use std::{pin::Pin, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
-use log::info;
-use rand::{distributions::{uniform::{UniformDuration, UniformSampler}, Uniform}, Rng};
+use rand::{distr::{uniform::UniformSampler, Uniform}, Rng};
 use tokio::{sync::{mpsc, Mutex}, task::JoinHandle, time::sleep};
 
 pub struct ResettableTimer {
@@ -109,11 +108,11 @@ impl RandomResettableTimer {
         let tout_min = self.min_timeout;
         let _self = self.clone();
         tokio::spawn(async move {
-            let dist = Uniform::new(tout_min, tout_max);
+            let dist = Uniform::new(tout_min, tout_max).unwrap();
             loop {
                 // This sleep has ms accuracy.
                 let duration = {
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     rng.sample(dist)
                 };
                 sleep(duration).await;

@@ -1,0 +1,135 @@
+use std::collections::HashMap;
+
+use dashmap::DashMap;
+use lru::LruCache;
+use serde::Serialize;
+
+use crate::{config::RocksDBConfig, utils::types::{CacheKey, CachedValue}};
+use rocksdb::{DBCompactionStyle, Options, WriteBatchWithTransaction, WriteOptions, DB};
+
+
+pub struct Cache {
+    read_cache: LruCache<CacheKey, CachedValue>,
+    db: DB,
+    alt_db: HashMap<CacheKey, CachedValue>,
+    db_path: String,
+}
+
+impl Cache {
+    pub fn new(cache_size: usize, config: RocksDBConfig) -> Self {
+        let mut opts = Options::default();
+            opts.create_if_missing(true);
+            opts.set_write_buffer_size(config.write_buffer_size);
+            opts.set_max_write_buffer_number(config.max_write_buffer_number);
+            opts.set_min_write_buffer_number_to_merge(config.max_write_buffers_to_merge);
+            opts.set_target_file_size_base(config.write_buffer_size as u64);
+            opts.set_level_zero_file_num_compaction_trigger(10);
+            opts.set_level_zero_slowdown_writes_trigger(20);
+            opts.set_level_zero_stop_writes_trigger(40);
+            opts.set_max_bytes_for_level_base(8 * config.write_buffer_size as u64);
+            opts.set_max_background_jobs(1);
+            opts.set_memtable_prefix_bloom_ratio(0.125);
+
+            opts.set_manual_wal_flush(true);
+            opts.set_compaction_style(DBCompactionStyle::Level);
+            opts.set_allow_mmap_reads(true);
+            opts.set_allow_mmap_writes(true);
+
+            // opts.increase_parallelism(3);
+
+            let path = config.db_path.clone();
+            let db = DB::open(&opts, path).unwrap();
+
+        Self { read_cache: LruCache::new(std::num::NonZero::new(cache_size).unwrap()), db, alt_db: HashMap::new(), db_path: config.db_path }
+    }
+
+    pub fn get(&mut self, key: &CacheKey) -> (Option<CachedValue>, bool /* read from cache */) {
+        let val = self.read_cache.get(key);
+        if val.is_some() {
+            return (val.cloned(), true);
+        }
+
+        // let val = self.db.get_pinned(key.clone()).unwrap();
+        let val = self.alt_db.get(key);
+
+        if val.is_none() {
+            return (None, false);
+        }
+
+        // let val: CachedValue = bincode::deserialize(&val.unwrap()).unwrap();
+        let val = val.unwrap().clone();
+        self.read_cache.put(key.clone(), val.clone());
+        self.alt_db.insert(key.clone(), val.clone());
+        (Some(val), false)
+    }
+
+    pub fn put(&mut self, key: CacheKey, value: CachedValue) {
+        let mut wopts = WriteOptions::default();
+        wopts.disable_wal(true);
+        // wopts.set_sync(sync);
+
+        // let ser = bincode::serialize(&value).unwrap();
+        // self.db.put_opt(key.clone(), ser, &wopts).unwrap();
+        self.alt_db.insert(key.clone(), value.clone());
+        self.read_cache.put(key, value);
+    }
+
+    pub fn len(&self) -> usize {
+        self.read_cache.len()
+    }
+
+    pub fn contains_key(&self, key: &CacheKey) -> bool {
+        if self.read_cache.contains(key) {
+            return true;
+        }
+
+        // if !self.db.key_may_exist(key) {
+        //     return false;
+        // }
+
+        // self.db.get_pinned(key).unwrap().is_some()
+        self.alt_db.contains_key(key)
+    }
+
+    pub fn stats(&self) -> Vec<String> {
+        let (max_seq_num, max2_seq_num, max_key, max2_key) = self.read_cache.iter()
+        .filter(|(_, val)| val.is_dww())
+        .fold((0u64, 0u64, CacheKey::new(), CacheKey::new()), |acc, (key, val)| {
+            let val = val.get_dww().unwrap();
+            if val.seq_num > acc.0 {
+                (val.seq_num, acc.0, key.clone(), acc.2)
+            } else if val.seq_num > acc.1 {
+                (acc.0, val.seq_num, acc.2, key.clone())
+            } else {
+                acc
+            }
+        });
+
+        let rocksdb_stats = self.db.property_value("rocksdb.stats").unwrap_or_default().unwrap_or_default();
+        let rocksdb_stat_lines = rocksdb_stats.split('\n').collect::<Vec<&str>>();
+        let _n = rocksdb_stat_lines.len();
+        let rocksdb_stats = rocksdb_stat_lines[_n-10..].join("\n");
+
+        let dir_size = fs_extra::dir::get_size(&self.db_path).unwrap_or_default();
+        
+        vec![
+            format!("Read Cache size: {}, Max seq num: {} with Key: {}, Second max seq num: {} with Key: {}",
+                self.read_cache.len(),
+                max_seq_num, String::from_utf8(max_key.clone()).unwrap_or(hex::encode(max_key)),
+                max2_seq_num, String::from_utf8(max2_key.clone()).unwrap_or(hex::encode(max2_key))
+            ),
+
+            format!("RocksDB stats: {}", rocksdb_stats),
+
+            format!("RocksDB directory size: {} MiB", (dir_size as f64) / (1024.0 * 1024.0)),
+        ]
+    }
+}
+
+impl Drop for Cache {
+    fn drop(&mut self) {
+        let _ = self.db.flush();
+        let opts = Options::default();
+        let _ = DB::destroy(&opts, &self.db_path);
+    }
+}

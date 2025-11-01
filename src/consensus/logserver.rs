@@ -2,9 +2,9 @@ use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::Arc};
 
 use log::{error, info, trace, warn};
 use prost::Message as _;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::Mutex;
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef, PinnedMessage}, utils::{channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::{checkpoint::{proto_backfill_nack::Origin, ProtoBackfillNack, ProtoBlockHint}, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork, ProtoViewChange}, rpc::{proto_payload::Message, ProtoPayload}}, rpc::{client::PinnedClient, MessageRef}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
 
 
 /// Deletes older blocks in favor of newer ones.
@@ -336,6 +336,8 @@ impl LogServer {
                     view: block.block.view,
                     view_is_stable: block.block.view_is_stable,
                     config_num: block.block.config_num,
+                    origin: block.block.origin.clone(),
+                    chain_id: block.block.chain_id,
                     serialized_body: block.block_ser.clone(),
                 }).collect(),
         }

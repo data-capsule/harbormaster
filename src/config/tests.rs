@@ -58,12 +58,20 @@ fn test_nodeconfig_serialize() {
         batch_max_delay_ms: 10,
         commit_index_gap_soft: 256,
         commit_index_gap_hard: 512,
+        max_audit_snapshots: 5,
+        max_audit_buffer_size: 10,
+        max_audit_delay_ms: 10000000,
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
 
         #[cfg(feature = "platforms")]
         liveness_u: 1,
+
+        max_gc_counter: 0,
+        max_gc_interval_ms: 0,
+
+        watchlist: vec![],
 
     };
 
@@ -75,6 +83,8 @@ fn test_nodeconfig_serialize() {
     let evil_config = EvilConfig {
         simulate_byzantine_behavior: true,
         byzantine_start_block: 20000,
+        rollbacked_response_ratio: 0.0,
+        rolledback_response_count: 0,
     };
 
     let config = Config {
@@ -134,8 +144,12 @@ fn test_clientconfig_serialize() {
         rpc_config,
         workload_config: WorkloadConfig {
             num_clients: 100,
+            start_index: 0,
             duration: 60,
+            ramp_up_ms: 0,
+            ramp_down_ms: 0,
             max_concurrent_requests: 10,
+            rate: 100_000.0,
             request_config: crate::config::RequestConfig::KVReadWriteUniform(KVReadWriteUniform {
                 num_keys: 1000,
                 val_size: 10000,
@@ -215,12 +229,20 @@ async fn test_atomic_config_access() {
         batch_max_delay_ms: 10,
         commit_index_gap_soft: 256,
         commit_index_gap_hard: 512,
+        max_audit_snapshots: 5,
+        max_audit_buffer_size: 10,
+        max_audit_delay_ms: 10000000,
 
         #[cfg(feature = "storage")]
         log_storage_config: crate::config::StorageConfig::RocksDB(RocksDBConfig::default()),
 
         #[cfg(feature = "platforms")]
         liveness_u: 1,
+    
+        max_gc_counter: 0,
+        max_gc_interval_ms: 0,
+        watchlist: vec![],
+
     };
 
     let app_config = AppConfig {
@@ -231,6 +253,8 @@ async fn test_atomic_config_access() {
     let evil_config = EvilConfig {
         simulate_byzantine_behavior: true,
         byzantine_start_block: 20000,
+        rollbacked_response_ratio: 0.0,
+        rolledback_response_count: 0,
     };
 
     let config = Config {

@@ -1,15 +1,15 @@
-use std::{collections::{HashMap, HashSet}, sync::atomic::fence};
+use std::{collections::HashMap, sync::atomic::fence};
 
-use log::{error, info, trace, warn};
+use log::{info, trace, warn};
 use prost::Message as _;
 
 use crate::{
     consensus::{
         block_broadcaster::BlockBroadcasterCommand, block_sequencer::BlockSequencerControlCommand, client_reply::ClientReplyCommand, fork_receiver::ForkReceiverCommand, pacemaker::PacemakerCommand
-    }, crypto::{default_hash, CachedBlock, HashType}, proto::{consensus::{HalfSerializedBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoViewChange}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::{deserialize_proto_block, get_parent_hash_in_proto_block_ser}
+    }, crypto::{default_hash, HashType}, proto::{consensus::{HalfSerializedBlock, ProtoFork, ProtoForkValidation, ProtoQuorumCertificate, ProtoViewChange}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::get_parent_hash_in_proto_block_ser
 };
 
-use super::{CachedBlockWithVotes, Staging};
+use super::Staging;
 
 #[derive(Clone, Debug)]
 pub struct ForkStat {
@@ -218,6 +218,8 @@ impl Staging {
                 view_is_stable: _parent.block.view_is_stable,
                 config_num: _parent.block.config_num,
                 serialized_body: _parent.block_ser.clone(),
+                origin: _parent.block.origin.clone(),
+                chain_id: _parent.block.chain_id,
             };
             ProtoFork {
                 serialized_blocks: vec![half_serialized_block]
@@ -237,6 +239,8 @@ impl Staging {
                 view_is_stable: b.block.block.view_is_stable,
                 config_num: b.block.block.config_num,
                 serialized_body: b.block.block_ser.clone(),
+                origin: b.block.block.origin.clone(),
+                chain_id: b.block.block.chain_id,
             }));
 
         // Fork sig will be the sig on the hash of the last block.

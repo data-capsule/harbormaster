@@ -4,6 +4,8 @@ import shutil
 from time import sleep
 import time
 from typing import List
+from psl_experiments import PSLExperiment
+from nimble_experiments import NimbleExperiment
 import tomli
 import click
 from click_default_group import DefaultGroup
@@ -22,7 +24,7 @@ import tqdm
 from crypto import *
 from app_experiments import AppExperiment
 from ssh_utils import *
-from deployment import Deployment
+from deployment import Deployment, AWSDeployment
 from experiments import Experiment
 from autobahn_experiments import AutobahnExperiment
 from results import *
@@ -116,7 +118,16 @@ def parse_config(path, workdir=None, existing_experiments=None):
         curr_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
         workdir = os.path.join(toml_dict["workdir"], curr_time)
 
-    deployment = Deployment(toml_dict["deployment_config"], workdir)
+    deployment_klass = Deployment
+    if "provider" in toml_dict["deployment_config"]:
+        if toml_dict["deployment_config"]["provider"] == "aws":
+            deployment_klass = AWSDeployment
+        elif toml_dict["deployment_config"]["provider"] == "azure":
+            deployment_klass = Deployment
+        else:
+            raise ValueError(f"Unknown provider: {toml_dict['deployment_config']['provider']}. Valid providers are: aws, azure")
+
+    deployment = deployment_klass(toml_dict["deployment_config"], workdir)
 
     base_node_config = toml_dict["node_config"]
     base_client_config = toml_dict["client_config"]
@@ -136,6 +147,10 @@ def parse_config(path, workdir=None, existing_experiments=None):
             klass = AppExperiment
         elif experiment_type == "autobahn":
             klass = AutobahnExperiment
+        elif experiment_type == "psl_storage":
+            klass = PSLExperiment
+        elif experiment_type == "nimble":
+            klass = NimbleExperiment
         project_home = toml_dict["project_home"]
 
         if "sweeping_parameters" in e:
@@ -163,15 +178,20 @@ def parse_config(path, workdir=None, existing_experiments=None):
                     int(_e["repeats"]),
                     int(_e["duration"]),
                     int(_e["num_nodes"]),
+                    int(_e.get("num_storage_nodes", 0)),
+                    int(_e.get("num_sequencer_nodes", 0)),
                     int(_e["num_clients"]),
                     _node_config,
                     _client_config,
                     _e.get("node_distribution", "uniform"),
+                    _e.get("storage_distribution", "uniform"),
+                    _e.get("sequencer_distribution", "uniform"),
                     _e.get("client_region", -1),    # -1 means use all clients
                     _e.get("build_command", "make"),
                     git_hash_override,
                     project_home,
-                    controller_must_run
+                    controller_must_run,
+                    _e.get("data_dir", "/data")
                 ))
         else:
             seq_start = int(e.get("seq_start", 0))
@@ -182,6 +202,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 int(e["repeats"]),
                 int(e["duration"]),
                 int(e["num_nodes"]),
+                int(e.get("num_storage_nodes", 0)),
+                int(e.get("num_sequencer_nodes", 0)),
                 int(e["num_clients"]),
                 node_config,
                 client_config,
@@ -190,7 +212,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
                 e.get("build_command", "make"),
                 git_hash_override,
                 project_home,
-                controller_must_run
+                controller_must_run,
+                e.get("data_dir", "/data")
             ))
 
     results = []
@@ -275,7 +298,29 @@ def all(config, workdir):
             
         result.output()
 
-    
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=False,
+    type=click.Path(file_okay=False, resolve_path=True),
+    default=None
+)
+def deploy_configs(config, workdir):
+    deployment, experiments, results = parse_config(config, workdir=workdir)
+
+    deployment.deploy()
+
+    for experiment in experiments:
+        try:
+            experiment.deploy_only_configs(deployment)
+        except Exception as e:
+            print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
+
 
 
 @main.command()
@@ -424,18 +469,18 @@ def deploy_experiments(config, workdir):
     cached_diff = ""
     cached_build_cmd = ""
     for experiment in experiments:
-        try:
+        # try:
             experiment.deploy(deployment, last_git_hash=cached_git_hash, last_git_diff=cached_diff, last_build_command=cached_build_cmd)
             hash, diff, build_cmd = experiment.get_build_details()
             cached_git_hash = hash
             cached_diff = diff
             cached_build_cmd = build_cmd
-        except Exception as e:
-            print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
-            cached_git_hash = ""
-            cached_diff = ""
-            cached_build_cmd = ""
-            # Force build on the next try
+        # except Exception as e:
+        #     print(f"Error deploying {experiment.name}. Continuing anyway: {e} {os.getcwd()}")
+        #     cached_git_hash = ""
+        #     cached_diff = ""
+        #     cached_build_cmd = ""
+        #     # Force build on the next try
 
 
     # Copy over the entire directory to all nodes

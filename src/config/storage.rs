@@ -44,5 +44,7 @@ impl Default for FileStorageConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum StorageConfig {
     RocksDB(RocksDBConfig),
-    FileStorage(FileStorageConfig)
+    FileStorage(FileStorageConfig),
+    BlackHole,
+    InMemory,
 }

@@ -3,18 +3,17 @@
 
 use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, KeyStore}, utils::{channel::make_channel, AtomicStruct}};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt, TryFutureExt};
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use rustls::{crypto::aws_lc_rs, pki_types, RootCertStore};
-use serde_cbor::ser::SliceWrite;
 use std::{
-    collections::{HashMap, HashSet}, fs::File, future::Future, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc}, time::Duration
+    collections::{HashMap, HashSet}, fs::File, io::{self, BufReader, Cursor, Error, ErrorKind}, ops::{Deref, DerefMut}, path, pin::Pin, sync::Arc, time::Duration
 };
 use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf},
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
     sync::{
         mpsc::{self, Sender, UnboundedSender}, oneshot, Mutex, RwLock
-    }, time::{sleep, timeout},
+    },
 };
 use std::time::Instant;
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
@@ -556,7 +555,7 @@ impl PinnedClient {
         let is_readable = {
             // Is there a partial message in the buffer?
             let sock = Self::get_sock(client, name, client.0.full_duplex).await?;
-            let mut lsock = sock.0.lock().await;
+            let lsock = sock.0.lock().await;
 
             if lsock.bound != lsock.offset {
                 true

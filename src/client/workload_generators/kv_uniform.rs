@@ -1,10 +1,10 @@
-use rand::distributions::{Uniform, WeightedIndex};
+use rand::distr::{weighted::WeightedIndex, Uniform};
 use rand_chacha::ChaCha20Rng;
 use rand::prelude::*;
 
 use crate::{config::KVReadWriteUniform, proto::execution::{ProtoTransaction, ProtoTransactionOp, ProtoTransactionOpType, ProtoTransactionPhase, ProtoTransactionResult}};
 
-use super::{Executor, PerWorkerWorkloadGenerator, WorkloadUnit};
+use super::{Executor, PerWorkerWorkloadGenerator, RateControl, WorkloadUnit, WrapperMode};
 
 #[derive(Clone)]
 enum TxOpType {
@@ -38,7 +38,7 @@ impl KVReadWriteUniformGenerator {
 
         let weight_dist = WeightedIndex::new(sample_item.iter().map(|(_, weight)| weight)).unwrap();
 
-        let uniform_dist = Uniform::new(0, config.num_keys);
+        let uniform_dist = Uniform::new(0, config.num_keys).unwrap();
         KVReadWriteUniformGenerator {
             config: config.clone(),
             rng,
@@ -70,7 +70,9 @@ impl PerWorkerWorkloadGenerator for KVReadWriteUniformGenerator {
                 is_reconfiguration: false,
                 is_2pc: false,
             },
-            executor: Executor::Leader
+            executor: Executor::Leader,
+            wrapper_mode: WrapperMode::ClientRequest,
+            rate_control: RateControl::CloseLoop,
         };
 
         match next_op {

@@ -69,7 +69,7 @@ pub struct RpcConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConsensusConfig {
     pub node_list: Vec<String>, // This better be in the same order in all nodes.
-    pub learner_list: Vec<String>,
+    pub learner_list: Vec<String>, // This is used by the storage server as sequencer list.
     pub max_backlog_batch_size: usize,
     pub batch_max_delay_ms: u64,
     pub signature_max_delay_ms: u64,
@@ -80,7 +80,67 @@ pub struct ConsensusConfig {
     pub liveness_u: u64,
     pub commit_index_gap_soft: u64, // ci - bci >= this -> even for crash commits, honest leader needs (n - u) votes
     pub commit_index_gap_hard: u64, // ci - bci >= this -> followers trigger view change.
+
+    pub max_audit_snapshots: usize, // Only used by the sequencer.
+    pub max_audit_buffer_size: usize, // Only used by the sequencer.
+    pub max_audit_delay_ms: u64, // Only used by the sequencer.
+
+    #[serde(default = "default_max_gc_counter")]
+    pub max_gc_counter: usize, // Only used by the sequencer.
+    #[serde(default = "default_max_gc_interval_ms")]
+    pub max_gc_interval_ms: u64, // Only used by the sequencer.
+
+    #[serde(default = "default_watchlist")]
+    pub watchlist: Vec<String>,
 }
+
+const fn default_watchlist() -> Vec<String> {
+    vec![]
+}
+
+const fn default_max_gc_counter() -> usize {
+    1_000
+}
+
+const fn default_max_gc_interval_ms() -> u64 {
+    1_000
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WorkerConfig {
+    pub all_worker_list: Vec<String>,
+    pub storage_list: Vec<String>,
+    pub gossip_downstream_worker_list: Vec<String>,
+    pub all_writes_max_batch_size: usize,
+    pub self_writes_max_batch_size: usize,
+    pub self_reads_max_batch_size: usize,
+    pub batch_max_delay_ms: u64,
+
+    #[serde(default = "default_heartbeat_max_delay_ms")]
+    pub heartbeat_max_delay_ms: u64,
+    pub signature_max_delay_ms: u64,
+    pub signature_max_delay_blocks: u64,
+    pub num_crypto_workers: usize,
+    pub num_worker_threads_per_worker: usize,
+    pub num_replier_threads_per_worker: usize,
+
+    #[serde(default = "default_nimble_endpoint_url")]
+    pub nimble_endpoint_url: Option<String>,
+
+    pub state_storage_config: StorageConfig,
+
+    #[serde(default = "default_read_cache_size")]
+    pub read_cache_size: usize,
+}
+
+const fn default_heartbeat_max_delay_ms() -> u64 {
+    200
+}
+
+const fn default_read_cache_size() -> usize {
+    30_000
+}
+
 
 impl ConsensusConfig {
     pub fn get_leader_for_view(&self, view: u64) -> String {
@@ -119,7 +179,21 @@ pub struct AppConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EvilConfig {
     pub simulate_byzantine_behavior: bool,
-    pub byzantine_start_block: u64,
+    pub byzantine_start_block: u64, // Used for consensus protocols.
+
+    #[serde(default = "default_rollbacked_response_ratio")]
+    pub rollbacked_response_ratio: f64, // Used for PSL workers.
+
+    #[serde(default = "default_rolledback_response_count")]
+    pub rolledback_response_count: usize,
+}
+
+const fn default_rollbacked_response_ratio() -> f64 {
+    0.0
+}
+
+const fn default_rolledback_response_count() -> usize {
+    0
 }
 
 
@@ -132,6 +206,29 @@ pub struct Config {
 
     #[cfg(feature = "evil")]
     pub evil_config: EvilConfig,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PSLWorkerConfig {
+    pub net_config: NetConfig,
+    pub rpc_config: RpcConfig,
+    pub worker_config: WorkerConfig,
+    pub app_config: AppConfig,
+
+    #[cfg(feature = "evil")]
+    pub evil_config: EvilConfig,
+
+}
+
+const fn default_nimble_endpoint_url() -> Option<String> {
+    None
+}
+
+impl PSLWorkerConfig {
+    /// If you don't set the nimble_endpoint_url, then it will panic.
+    pub fn get_nimble_endpoint_url(&self) -> String {
+        self.worker_config.nimble_endpoint_url.clone().unwrap()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -148,12 +245,84 @@ pub struct ClientRpcConfig {
 
 }
 
+const fn default_rate() -> f64 {
+    100_000.0
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkloadConfig {
     pub num_clients: usize,
+
+    #[serde(default = "default_start_index")]
+    pub start_index: usize,
+
     pub duration: u64,
+
+    #[serde(default = "default_ramp_up_ms")]
+    pub ramp_up_ms: u64,
+
+    #[serde(default = "default_ramp_down_ms")]
+    pub ramp_down_ms: u64,
+
     pub max_concurrent_requests: usize,
+
+    #[serde(default = "default_rate")]
+    pub rate: f64, // in requests per second
+
     pub request_config: RequestConfig
+}
+
+const fn default_start_index() -> usize {
+    0
+}
+
+const fn default_ramp_up_ms() -> u64 {
+    0
+}
+
+const fn default_ramp_down_ms() -> u64 {
+    0
+}
+
+impl WorkerConfig {
+    pub fn to_consensus_config(&self) -> ConsensusConfig {
+        ConsensusConfig {
+            node_list: self.storage_list.clone(),
+            learner_list: self.storage_list.clone(),
+            max_backlog_batch_size: self.all_writes_max_batch_size,
+            batch_max_delay_ms: self.batch_max_delay_ms,
+            signature_max_delay_ms: self.signature_max_delay_ms,
+            signature_max_delay_blocks: self.signature_max_delay_blocks,
+            num_crypto_workers: self.num_crypto_workers,
+            
+            // These are not used in the worker config.
+            log_storage_config: StorageConfig::BlackHole,
+            view_timeout_ms: 0,
+            liveness_u: 0,
+            commit_index_gap_soft: 0,
+            commit_index_gap_hard: 0,
+            max_audit_snapshots: 0,
+            max_audit_buffer_size: 0,
+            max_audit_delay_ms: 10000000,
+            max_gc_counter: 0,
+            max_gc_interval_ms: 0,
+            watchlist: vec![],
+        }
+    }
+}
+
+impl PSLWorkerConfig {
+    pub fn to_config(&self) -> Config {
+        Config {
+            net_config: self.net_config.clone(),
+            rpc_config: self.rpc_config.clone(),
+            consensus_config: self.worker_config.to_consensus_config(),
+            app_config: self.app_config.clone(),
+
+            #[cfg(feature = "evil")]
+            evil_config: self.evil_config.clone(),
+        }
+    }
 }
 
 
@@ -214,10 +383,15 @@ impl ClientConfig {
                 num_crypto_workers: 128,
                 commit_index_gap_soft: 256,
                 commit_index_gap_hard: 512,
-
+                max_audit_snapshots: 5,
+                max_audit_buffer_size: 10,
+                max_audit_delay_ms: 10000000,
                 liveness_u: 1,
 
                 log_storage_config: StorageConfig::RocksDB(RocksDBConfig::default()),
+                max_gc_counter: 0,
+                max_gc_interval_ms: 0,
+                watchlist: vec![],
             },
             app_config: AppConfig {
                 logger_stats_report_ms: 100,
@@ -227,7 +401,9 @@ impl ClientConfig {
             #[cfg(feature = "evil")]
             evil_config: EvilConfig {
                 simulate_byzantine_behavior: false,
-                byzantine_start_block: 0
+                byzantine_start_block: 0,
+                rollbacked_response_ratio: 0.0,
+                rolledback_response_count: 0,
             }
         }
     }
@@ -241,5 +417,18 @@ impl AtomicConfig {
         config.consensus_config.validate_or_die();
 
         self.set(config);
+    }
+}
+
+pub type AtomicPSLWorkerConfig = AtomicStruct<PSLWorkerConfig>;
+
+impl PSLWorkerConfig {
+    pub fn serialize(self: &Self) -> String {
+        serde_json::to_string_pretty(self).expect("Invalid Config")
+    }
+
+    pub fn deserialize(s: &String) -> PSLWorkerConfig {
+        let res: Result<PSLWorkerConfig> = serde_json::from_str(s.as_str());
+        res.expect("Invalid JSON config")
     }
 }

@@ -7,7 +7,7 @@ import pickle
 from typing import Callable, Dict, List, OrderedDict, Tuple
 
 from experiments import Experiment
-from collections import defaultdict
+from collections import defaultdict, OrderedDict as ODict
 import re
 from dateutil.parser import isoparse
 import datetime
@@ -36,13 +36,18 @@ from autobahn_experiments import AutobahnExperiment
 # Log format follows the log4rs config.
 # Capture the time from the 3rd []
 
-# Sample log: [INFO][pft::execution::engines::logger][2024-08-06T10:28:13.926997933+00:00] fork.last = 2172, fork.last_qc = 2169, commit_index = 2171, byz_commit_index = 2166, pending_acks = 200, pending_qcs = 1 num_crash_committed_txs = 100, num_byz_committed_txs = 100, fork.last_hash = b7da989badce213929ab457e5301b587593e0781e081ba7261d57cd7778e1b7b, total_client_request = 388706, view = 1, view_is_stable = true, i_am_leader: true
+# Sample log: [INFO][psl::execution::engines::logger][2024-08-06T10:28:13.926997933+00:00] fork.last = 2172, fork.last_qc = 2169, commit_index = 2171, byz_commit_index = 2166, pending_acks = 200, pending_qcs = 1 num_crash_committed_txs = 100, num_byz_committed_txs = 100, fork.last_hash = b7da989badce213929ab457e5301b587593e0781e081ba7261d57cd7778e1b7b, total_client_request = 388706, view = 1, view_is_stable = true, i_am_leader: true
 node_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] fork\.last = ([0-9]+), fork\.last_qc = ([0-9]+), commit_index = ([0-9]+), byz_commit_index = ([0-9]+), pending_acks = ([0-9]+), pending_qcs = ([0-9]+) num_crash_committed_txs = ([0-9]+), num_byz_committed_txs = ([0-9]+), fork\.last_hash = (.+), total_client_request = ([0-9]+), view = ([0-9]+), view_is_stable = (.+), i_am_leader\: (.+)")
 node_rgx2 = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total unlogged txs: ([0-9]+)")
 
-# Sample log: [INFO][pft::client::logger][2025-02-25T23:33:23.145307984+00:00] Average Crash commit latency: 104390 us, Average Byz commit latency: 29271247 us
+# Sample log: [INFO][psl::client::logger][2025-02-25T23:33:23.145307984+00:00] Average Crash commit latency: 104390 us, Average Byz commit latency: 29271247 us
 client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average Crash commit latency: ([0-9]+) us, Average Byz commit latency: ([0-9]+) us")
 
+# Sample log: [INFO][psl::storage_server::logserver][2025-06-14T01:17:15.208949993+00:00] Total blocks stored: 1062 blocks or 1062.1507863998413 MiB
+storage_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Total blocks stored: ([0-9]+) blocks or ([0-9.]+) MiB")
+
+
+psl_client_rgx = re.compile(r"\[INFO\]\[.*\]\[(.*)\] Average benchmark latency: ([0-9]+) us Total benchmarked requests: ([0-9]+).*")
 
 def process_tput(points, duration, ramp_up, ramp_down, tputs, tputs_unbatched, byz=False, read_points=[[]]) -> List:
     '''
@@ -764,9 +769,9 @@ class Result:
                 y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
                 # if y_range_total > 200:
                 # plt.yscale("log")
-                # plt.ylim((0, 125))
+                plt.ylim((0, 4))
                 # plt.xlim((50, 550))
-                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=legends_ncols, fontsize=70)
+                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.3), ncol=legends_ncols, fontsize=65)
                 plt.xticks(fontsize=70)
                 plt.yticks(fontsize=70)
 
@@ -818,8 +823,135 @@ class Result:
 
 
 
+    def tput_latency_sweep_psl(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        legends = self.kwargs.get('legends', {})
+        force_parse = self.kwargs.get('force_parse', False)
+        
+        # Try to fetch plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.tput_latency_sweep_psl_parse(ramp_up, ramp_down, legends)
+
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
+
+        output = self.kwargs.get('output', None)
+        self.tput_latency_sweep_plot(plot_dict, output)
+
+        # Print a summary of the results
+        with open(os.path.join(self.workdir, "summary.txt"), "w") as f:
+            for legend, stats in plot_dict.items():
+                f.write(f"{legend}\n")
+                for stat in stats:
+                    f.write(f"=============Num Nodes: {stat.num_nodes}, Num Clients: {stat.num_clients}================\n")
+                    f.write(f"Mean Tput: {stat.mean_tput} ktx/s, Mean Latency: {stat.mean_latency} ms\n")
+                    f.write(f"Median Latency: {stat.median_latency} ms, 99th Percentile Latency: {stat.p99_latency} ms\n")
+                    f.write(f"Max Latency: {stat.max_latency} ms, Min Latency: {stat.min_latency} ms\n")
+                    f.write(f"Stdev Tput: {stat.stdev_tput} ktx/s, Stdev Latency: {stat.stdev_latency} ms\n")
+                    f.write("==================================\n")
 
 
+    def tput_latency_sweep_psl_parse(self, ramp_up, ramp_down, legends):
+        plot_dict = {}
+
+        # Which indices do I skip?
+        skip_indices = self.kwargs.get('skip_indices', [])
+
+        # Find parsing log files for each group
+        for group_name, experiments in self.experiment_groups.items():
+            print("========", group_name, "========")
+            experiments.sort(key=lambda x: x.seq_num)
+            legend = legends.get(group_name, None)
+            if legend is None:
+                print("\x1b[31;1mNo legend found for", group_name, ". Skipping...\x1b[0m")
+                continue
+            
+            final_stats = []
+
+            for idx, experiment in enumerate(experiments):
+                if idx in skip_indices:
+                    print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
+                    continue
+
+                stats = self.process_psl_experiment(experiment, ramp_up, ramp_down)
+                if stats is not None:
+                    final_stats.append(stats)
+                else:
+                    print("\x1b[31;1mSkipping experiment", experiment.name, "for crash commit\x1b[0m")
+
+            plot_dict[legend] = final_stats
+
+        pprint(plot_dict)
+        return plot_dict
+
+
+    def process_psl_experiment(self, experiment, ramp_up, ramp_down):
+        duration = experiment.duration
+        tputs = []
+        latencies = []
+        for repeat_num in range(experiment.repeats):
+            log_dir = os.path.join(experiment.local_workdir, "logs", str(repeat_num))
+            # Find the first node log file and all client log files in log_dir
+            client_log_files = [f for f in os.listdir(log_dir) if f.startswith("client") and f.endswith(".log")]
+            client_log_files = [os.path.join(log_dir, f) for f in client_log_files]
+
+            pprint(client_log_files)
+            tput, latency = self.parse_psl_client_logs(client_log_files, duration, ramp_up, ramp_down)
+
+            if tput is None or latency is None:
+                continue
+            tputs.append(tput / 1000.0) # Convert to ktx/s
+            latencies.append(latency / 1000.0) # Convert to ms
+        
+        return Stats(
+            num_nodes=experiment.num_nodes,
+            num_clients=experiment.num_clients,
+            mean_tput=np.mean(tputs),
+            stdev_tput=np.std(tputs),
+            mean_tput_unbatched=np.mean(tputs),
+            stdev_tput_unbatched=np.std(tputs),
+            latency_prob_dist=np.array(latencies),
+            mean_latency=np.mean(latencies),
+            median_latency=np.median(latencies),
+            p25_latency=np.percentile(latencies, 25),
+            p75_latency=np.percentile(latencies, 75),
+            p99_latency=np.percentile(latencies, 99),
+            max_latency=np.max(latencies),
+            min_latency=np.min(latencies),
+            stdev_latency=np.std(latencies)
+        )
+
+    def parse_psl_client_logs(self, client_log_files, duration, ramp_up, ramp_down):
+        latency_sum = 0
+        num_requests = 0
+        for client_log_file in client_log_files:
+            with open(client_log_file, "r") as f:
+                # Keep just the last line
+                last_capture = None
+                for line in f.readlines():
+                    captures = psl_client_rgx.findall(line)
+                    if len(captures) == 1:
+                        last_capture = (int(captures[0][1]), int(captures[0][2]))
+            
+                latency_sum += last_capture[0] * last_capture[1]
+                num_requests += last_capture[1]
+
+        if num_requests == 0:
+            return None, None
+        mean_latency = latency_sum / num_requests
+        tput = num_requests / (duration - ramp_up - ramp_down)
+        return tput, mean_latency
+
+    
 
     def tput_latency_sweep(self):
         '''
@@ -927,9 +1059,9 @@ class Result:
                 plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3,
 
-                # Error bars
-                yerr=stdev_matrix[:, i], # Error bars
-                capsize=5, linewidth=5,   
+                # # Error bars
+                # yerr=stdev_matrix[:, i], # Error bars
+                # capsize=5, linewidth=5,   
             )
             # _latencies = list(latency_matrix[:, i])
             # _latencies = [str(int(x)) for x in _latencies]
@@ -938,15 +1070,16 @@ class Result:
 
         ax.set_xticks(label_pos, xlabels)
         plt.ylim(0, ylim+50)
+        # plt.yticks([0, 5, 10, 15, 20], fontsize=90)
+        plt.ylim((0, 40))
         plt.ylabel("Throughput (k req/s)", fontsize=90)
         if "xtitle" in self.kwargs:
             plt.xlabel(self.kwargs["xtitle"], fontsize=90)
         plt.xticks(fontsize=80)
-        plt.yticks([0, 500, 1000, 1500, 2000], fontsize=90)
         # plt.yticks(fontsize=90)
 
         if len(plot_dict_items) > 1:
-            plt.legend(loc="upper center", ncols=2, bbox_to_anchor=(0.5, 1.28), fontsize=60, columnspacing=0.3)
+            plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.28), fontsize=60, columnspacing=0.3)
         plt.grid(zorder=0)
 
         plt.gcf().set_size_inches(
@@ -1135,7 +1268,123 @@ class Result:
         self.crash_byz_tput_timeseries_plot(times, crash_commits, byz_commits, events)
 
 
+    def stacked_bar_graph_psl(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        legends = self.kwargs.get('legends', {})
+        legend_order = self.kwargs.get("legend_order", None)
+        force_parse = self.kwargs.get('force_parse', False)
+        xlabels = self.kwargs.get('xlabels', [])
+
+        # if legend_order is not None:
+        #     _legends = ODict()
+        #     for legend in legend_order:
+        #         _legends[legend] = legends[legend]
+        #     legends = _legends
+
+
+
+        # Number of xlabels must match number of subexperiments for each group.
+        for group_name, experiments in self.experiment_groups.items():
+            if len(xlabels) != len(experiments):
+                print("\x1b[31;1mNumber of xlabels must match number of subexperiments for each group.\x1b[0m")
+                raise Exception("Number of xlabels must match number of subexperiments for each group.")
+
+        # Try retreive plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.stacked_bar_graph_psl_parse(ramp_up, ramp_down, legends)
+
+        if legend_order is not None:
+            _plot_dict = ODict()
+            for legend in legend_order:
+                _plot_dict[legend] = plot_dict[legend]
+            plot_dict = _plot_dict
+
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
+
+        output = self.kwargs.get('output', None)
+        self.stacked_bar_graph_plot(plot_dict, output, xlabels)
+
+
+    def tput_nodes_line_plot_psl(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        legends = self.kwargs.get('legends', {})
+        force_parse = self.kwargs.get('force_parse', False)
+
+        # Try retreive plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.tput_nodes_line_plot_psl_parse(ramp_up, ramp_down, legends)
+
+
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
+
+        output = self.kwargs.get('output', None)
+        self.tput_nodes_line_plot_plot(plot_dict, output)
+
+    def tput_nodes_line_plot_plot(self, plot_dict, output):
+        font = self.kwargs.get('font', {
+            'size'   : 90,
+            'family': 'serif',
+            'serif': ["Linux Libertine O"],
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+        matplotlib.rcParams['ps.useafm'] = True
+        matplotlib.rcParams['pdf.use14corefonts'] = True
+        matplotlib.rcParams['text.usetex'] = True
+        # matplotlib.rcParams["text.latex.preview"] = True
+        matplotlib.rcParams['text.latex.preamble'] = r"""
+        \usepackage{libertine}
+        \usepackage[libertine]{newtxmath}
+        """
+
+        for legend, stats in plot_dict.items():
+            tputs = [stat.mean_tput for stat in stats]
+            nodes = [stat.num_nodes for stat in stats]
+            plt.plot(nodes, tputs, label=legend)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=3, fontsize=70)
+        plt.xlabel("Number of Nodes")
+        plt.ylabel("Throughput (k req/s)")
+        plt.grid()
         
+        plt.gcf().set_size_inches(
+            self.kwargs.get("output_width", 30),
+            self.kwargs.get("output_height", 12)
+        )
+
+        if output is not None:
+            output = os.path.join(self.workdir, output)
+            plt.savefig(output, bbox_inches="tight")
+        else:
+            plt.show()
+
+
+    def tput_nodes_line_plot_psl_parse(self, ramp_up, ramp_down, legends):
+        return collections.OrderedDict(self.tput_latency_sweep_psl_parse(ramp_up, ramp_down, legends))
+
+
+    def stacked_bar_graph_psl_parse(self, ramp_up, ramp_down, legends):
+        return collections.OrderedDict(self.tput_latency_sweep_psl_parse(ramp_up, ramp_down, legends))
+
 
 
 
@@ -1190,3 +1439,133 @@ class Result:
 
     def output(self):
         self.plotter_func()
+
+
+    def throughput_client_sweep(self):
+        # Parse args
+        ramp_up = self.kwargs.get('ramp_up', 0)
+        ramp_down = self.kwargs.get('ramp_down', 0)
+        legends = self.kwargs.get('legends', {})
+        force_parse = self.kwargs.get('force_parse', False)
+
+        # Try to fetch plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.throughput_client_sweep_parse(ramp_up, ramp_down, legends)
+
+        # Save plot dict
+        with open(os.path.join(self.workdir, "plot_dict.pkl"), "wb") as f:
+            pickle.dump(plot_dict, f)
+
+        output = self.kwargs.get('output', None)
+        self.throughput_client_sweep_plot(plot_dict, output)
+
+    def throughput_client_sweep_parse(self, ramp_up, ramp_down, legends):
+        plot_dict = defaultdict(dict)
+
+        # Which indices do I skip?
+        skip_indices = self.kwargs.get('skip_indices', [])
+
+        summary_file = os.path.join(self.workdir, "summary.txt")
+        summary_file = open(summary_file, "w")
+
+        # Find parsing log files for each group
+        for group_name, experiments in self.experiment_groups.items():
+            if group_name not in legends:
+                continue
+
+            print("========", group_name, "========")
+            experiments.sort(key=lambda x: x.seq_num)
+
+            print("========", legends[group_name], "========", file=summary_file)
+
+            # Find parsing log files for each experiment
+            for j, experiment in enumerate(experiments):
+                if j in skip_indices:
+                    continue
+
+                # Find node1.log in the experiment's workdir
+                node1_log = os.path.join(experiment.local_workdir, "logs", "0", "node1.log")
+                if not os.path.exists(node1_log):
+                    print(f"Warning: {node1_log} does not exist")
+                    continue
+
+                # Parse the log file
+                log_lines = []
+                with open(node1_log, "r") as f:
+                    for line in f:
+                        match = storage_rgx.match(line)
+                        if match:
+                            log_lines.append((isoparse(match.group(1)), int(match.group(2)), float(match.group(3))))
+
+                # Sort log lines by time
+                log_lines.sort(key=lambda x: x[0])
+
+                start_time = log_lines[0][0] + datetime.timedelta(seconds=ramp_up)
+                end_time = log_lines[-1][0] + datetime.timedelta(seconds=ramp_down)
+
+                # Filter blocks based on start and end time
+                filtered_blocks = [block for block in log_lines if start_time <= block[0] <= end_time]
+
+                # Get the total blocks stored
+                total_bytes = filtered_blocks[-1][2] - filtered_blocks[0][2]
+
+                total_time = end_time - start_time
+
+                # Get the throughput
+                throughput = total_bytes / total_time.total_seconds()
+                num_clients = experiment.num_clients
+
+                print("Throughput:", throughput, "MiB/s", "for", num_clients, "clients", file=summary_file)
+
+                plot_dict[legends[group_name]][num_clients] = throughput
+
+
+        summary_file.close()
+        return plot_dict
+    
+    def throughput_client_sweep_plot(self, plot_dict, output):
+        xticks = list(plot_dict[list(plot_dict.keys())[0]].keys())
+        xticks_list = [str(x) for x in xticks]
+        xticks_pos = [x for x in xticks]
+
+        y_max = max(max(data.values()) for data in plot_dict.values()) + 10
+        
+        
+        font = self.kwargs.get('font', {
+            'size'   : 65
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+
+        plt.figure(figsize=(30, 12))
+
+        # Plot the throughput for each group
+        markers = ['o', 's', 'D', 'v', '^', 'P', 'H', 'X', 'd', '1']
+        for i, (group_name, data) in enumerate(plot_dict.items()):
+            plt.plot(data.keys(), data.values(), label=group_name, marker=markers[i], markersize=10, linewidth=5)
+
+
+        input_rate_slope = self.kwargs.get('input_rate_slope', None)
+        if input_rate_slope:
+            input_rate_y = [x * input_rate_slope for x in xticks]
+            plt.plot(xticks, input_rate_y, linewidth=5, linestyle='--', color='black')
+
+        plt.xlabel("Number of Hash Chains", fontsize=font['size'])
+        plt.ylabel("Throughput (MiB/s)", fontsize=font['size'])
+
+        plt.xscale('log')
+        plt.xticks(xticks_pos, xticks_list, fontsize=font['size'])
+        
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=(len(plot_dict) + 1)//2, fontsize=font['size'])
+        plt.grid()
+
+        plt.ylim(0, y_max)
+
+        output_path = os.path.join(self.workdir, output)
+        plt.savefig(output_path, bbox_inches='tight')
