@@ -67,6 +67,7 @@ memorydb = "0.3.0"
 lru = "0.16.1"
 fjall = "2.11.2"
 fs_extra = "1.3.0"
+serde_with = "3.16.1"
 
 [build-dependencies]
 prost-build = { version = "0.14.1" }
