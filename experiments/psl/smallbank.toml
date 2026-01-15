@@ -2,7 +2,7 @@ workdir = "deployment_artifacts"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-provider = "aws"
+# provider = "aws"
 mode = "modest"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
