@@ -74,7 +74,8 @@ resource "azurerm_public_ip" "sevpool_public_ip" {
   count               = length(local.sevpool_ids_flattened_)
   location            = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
   resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Dynamic"
+  allocation_method   = "Static"
+  sku                 = "Standard"
 }
 
 resource "azurerm_public_ip" "tdxpool_public_ip" {
@@ -82,7 +83,8 @@ resource "azurerm_public_ip" "tdxpool_public_ip" {
   count               = length(local.tdxpool_ids_flattened_)
   location            = var.platform_locations[local.tdxpool_ids_flattened_[count.index][0]]
   resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Dynamic"
+  allocation_method   = "Static"
+  sku                 = "Standard"
 }
 
 resource "azurerm_public_ip" "clientpool_public_ip" {
@@ -90,7 +92,8 @@ resource "azurerm_public_ip" "clientpool_public_ip" {
   count               = length(local.clientpool_ids_flattened_)
   location            = var.platform_locations[local.clientpool_ids_flattened_[count.index][0]]
   resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Dynamic"
+  allocation_method   = "Static"
+  sku                 = "Standard"
 }
 
 resource "azurerm_public_ip" "nonteepool_public_ip" {
@@ -98,7 +101,8 @@ resource "azurerm_public_ip" "nonteepool_public_ip" {
   count               = length(local.nonteepool_ids_flattened_)
   location            = var.platform_locations[local.nonteepool_ids_flattened_[count.index][0]]
   resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Dynamic"
+  allocation_method   = "Static"
+  sku                 = "Standard"
 }
 
 
@@ -290,8 +294,8 @@ resource "azurerm_linux_virtual_machine" "sevpool_vm" {
   location              = var.platform_locations[local.sevpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.sevpool_nic[count.index].id]
-  size                  = "Standard_DC16ads_v5"
-  # size                  = "Standard_EC16eds_v5"
+  # size                  = "Standard_DC16ads_v5"
+  size                  = "Standard_EC8ads_v5"
 
 #   delete_os_disk_on_termination    = true
   # delete_data_disks_on_termination = true
@@ -400,7 +404,7 @@ resource "azurerm_linux_virtual_machine" "clientpool_vm" {
   location              = var.platform_locations[local.clientpool_ids_flattened_[count.index][0]]
   resource_group_name   = azurerm_resource_group.rg.name
   network_interface_ids = [azurerm_network_interface.clientpool_nic[count.index].id]
-  size                  = "Standard_D8ds_v5"
+  size                  = "Standard_D8ds_v6"
 
 #   delete_os_disk_on_termination    = true
 #   delete_data_disks_on_termination = true

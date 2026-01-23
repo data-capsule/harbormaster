@@ -8,6 +8,12 @@ ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
 node_port_base = 3000
 
+[deployment_config.tag_node_counts]
+worker = 8
+sequencer = 1
+storage = 3
+client = 3
+
 [node_config]
 
 [node_config.net_config]
