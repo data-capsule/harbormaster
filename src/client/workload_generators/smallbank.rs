@@ -181,13 +181,13 @@ impl SmallbankGenerator {
     }
 
     fn load_phase_next(&mut self) -> WorkloadUnit {
-        loop {
-            self.load_phase_cnt += 1;
+        // loop {
+        self.load_phase_cnt += 1;
 
-            if self.load_phase_cnt % self.total_clients == self.client_idx {
-                break;
-            }
-        }
+        //     if self.load_phase_cnt % self.total_clients == self.client_idx {
+        //         break;
+        //     }
+        // }
         trace!("Worker {} Load phase count: {}", self.client_idx, self.load_phase_cnt);
         let custid = self.load_phase_cnt as u64;
         let name = Self::get_name_from_custid(custid);

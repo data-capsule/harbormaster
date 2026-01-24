@@ -264,7 +264,11 @@ class Deployment:
         ]
 
         print(ssh_cmds)
-        res = run_remote_public_ip(ssh_cmds, self.ssh_user, self.ssh_key, self.dev_vm)
+        _res = run_remote_public_ip_parallel(ssh_cmds, self.ssh_user, self.ssh_key, self.dev_vm)
+        res = []
+        for __r in _res:
+            res.extend(__r)
+    
 
         for (i, node) in enumerate(nodelist):
             print("Copied to", node.name, "Output (truncated):\n", "\n".join(res[i].split("\n")[-2:]))
