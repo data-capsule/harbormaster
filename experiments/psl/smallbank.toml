@@ -3,13 +3,13 @@ project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
 # provider = "aws"
-mode = "modest"
+mode = "max"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
 node_port_base = 3000
 
 [deployment_config.tag_node_counts]
-worker = 8
+worker = 32
 sequencer = 1
 storage = 3
 client = 3
@@ -104,7 +104,7 @@ name = "smallbank"
 type = "psl_storage"
 # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
 repeats = 1
-num_nodes = 8
+num_nodes = 32
 # num_clients = 100
 num_storage_nodes = 3
 num_sequencer_nodes = 1
@@ -112,16 +112,16 @@ node_distribution = "tag:worker"
 storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
-duration = 45
+duration = 90
 data_dir = "/data/"
-seq_start = 5
+# seq_start = 5
 
 [experiments.sweeping_parameters]
 # num_clients = [1, 4, 8, 16, 32, 48, 96, 128, 160]
 # num_clients = [48, 96, 128, 160]
 # num_clients = [192, 256, 320]
 # num_clients = [400, 640]
-num_clients = [1000]
+num_clients = [1000, 1500, 2000, 2500]
 
 [[results]]
 name = "throughput_client_sweep"

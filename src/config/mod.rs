@@ -256,6 +256,8 @@ pub struct WorkloadConfig {
     #[serde(default = "default_start_index")]
     pub start_index: usize,
 
+    pub total_global_clients: usize,
+
     pub duration: u64,
 
     #[serde(default = "default_ramp_up_ms")]
