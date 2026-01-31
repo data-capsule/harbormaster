@@ -9,7 +9,7 @@ ssh_user = "psladmin"
 node_port_base = 3000
 
 [deployment_config.tag_node_counts]
-worker = 32
+worker = 16
 sequencer = 1
 storage = 3
 client = 3
