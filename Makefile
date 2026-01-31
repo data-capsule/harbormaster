@@ -9,7 +9,7 @@ pirateship_logger:
 
 .PHONY: multilog
 multilog:
-	CC=clang CXX=clang++ cargo build --release --features pirateship,app_banking,storage,fast_path,platforms,gossip,evil,multilog --no-default-features
+	CC=clang CXX=clang++ cargo build --release --features pirateship,app_key_transparency,storage,fast_path,platforms,gossip,evil,multilog --no-default-features
 
 .PHONY: nimble
 nimble:
