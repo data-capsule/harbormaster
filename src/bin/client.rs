@@ -87,7 +87,7 @@ async fn main() -> std::io::Result<()> {
                 ClientWorker::launch(worker, &mut client_handles).await;
             },
             RequestConfig::Smallbank(ref smallbank) => {
-                let generator = SmallbankGenerator::new(smallbank, id, config.workload_config.num_clients);
+                let generator = SmallbankGenerator::new(smallbank, id, config.workload_config.total_global_clients);
                 let worker = ClientWorker::new(config, client, generator, id, _stat_tx);
                 ClientWorker::launch(worker, &mut client_handles).await;
             },

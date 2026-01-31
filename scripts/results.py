@@ -717,8 +717,8 @@ class Result:
 
         
         legends_ncols = self.kwargs.get('legends_ncols', len(plot_dict))
-        if legends_ncols > 3:
-            legends_ncols = 3
+        if legends_ncols > 4:
+            legends_ncols = 4
 
     
         try:
@@ -769,9 +769,9 @@ class Result:
                 y_range_total = max([v[3] for v in bounding_boxes.values()]) - min([v[2] for v in bounding_boxes.values()])
                 # if y_range_total > 200:
                 # plt.yscale("log")
-                plt.ylim((0, 10))
+                # plt.ylim((0, 4))
                 # plt.xlim((50, 550))
-                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.4), ncol=legends_ncols, fontsize=70)
+                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.17), ncol=legends_ncols, fontsize=50)
                 plt.xticks(fontsize=70)
                 plt.yticks(fontsize=70)
 
@@ -1055,7 +1055,7 @@ class Result:
         fig, ax = plt.subplots(layout="constrained")
         for i, (legend, stats) in enumerate(plot_dict_items):
             rects = ax.bar(
-                bar_start_pos + (gap_between_bars + i * bar_width), # Where to start the bar
+                bar_start_pos + (gap_between_bars + i * bar_width - 0.1), # Where to start the bar
                 plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3,
 
@@ -1074,9 +1074,9 @@ class Result:
         plt.ylim((0, 500))
         plt.ylabel("Throughput (k req/s)", fontsize=90)
         if "xtitle" in self.kwargs:
-            plt.xlabel(self.kwargs["xtitle"], fontsize=90)
+            plt.xlabel(self.kwargs["xtitle"], fontsize=80)
         plt.xticks(fontsize=80)
-        # plt.yticks(fontsize=90)
+        # plt.yticks(fontsize=80)
 
         if len(plot_dict_items) > 1:
             plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.28), fontsize=60, columnspacing=0.3)

@@ -764,10 +764,19 @@ impl CacheManager {
 
                 if should_propagate {
                     // let (current_vc_tx, current_vc_rx) = oneshot::channel();
+                    #[cfg(not(feature = "multilog"))]
                     let _ = self.block_sequencer_tx.send(SequencerCommand::OtherWriteOp {
                         key: key.clone(),
                         value: cached_value.clone(),
                         is_ack_barrier: false,
+                        // current_vc: current_vc_tx,
+                    }).await;
+
+                    #[cfg(feature = "multilog")]
+                    let _ = self.block_sequencer_tx.send(SequencerCommand::SelfWriteOp {
+                        key: key.clone(),
+                        value: cached_value.clone(),
+                        seq_num_query: BlockSeqNumQuery::DontBother,
                         // current_vc: current_vc_tx,
                     }).await;
                     // let current_vc = current_vc_rx.await.unwrap();

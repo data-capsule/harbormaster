@@ -272,6 +272,7 @@ class NimbleExperiment(PSLExperiment):
             config["workload_config"]["num_clients"] = num_clients_per_vm[client_num]
             config["workload_config"]["duration"] = self.duration
             config["workload_config"]["start_index"] = client_start_index
+            config["workload_config"]["total_global_clients"] = self.num_clients
             client_start_index += num_clients_per_vm[client_num]
 
             self.binary_mapping[client_vms[client_num]].append(client)
