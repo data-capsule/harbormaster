@@ -182,7 +182,7 @@ impl SmallbankGenerator {
 
     fn load_phase_next(&mut self) -> WorkloadUnit {
         loop {
-            self.load_phase_cnt += 1;
+            self.load_phase_cnt += self.client_idx;
 
             if self.load_phase_cnt % self.total_clients == self.client_idx {
                 break;

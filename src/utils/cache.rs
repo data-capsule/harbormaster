@@ -58,7 +58,7 @@ impl Cache {
 
         // let val: CachedValue = bincode::deserialize(&val.unwrap()).unwrap();
         let val = val.unwrap().clone();
-        // self.read_cache.put(key.clone(), val.clone());
+        self.read_cache.put(key.clone(), val.clone());
         self.alt_db.insert(key.clone(), val.clone());
         (Some(val), false)
     }

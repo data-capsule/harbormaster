@@ -1,12 +1,18 @@
-workdir = "deployment_artifacts"
+workdir = "vldb_rev"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-provider = "aws"
-mode = "modest"
+# provider = "aws"
+mode = "max"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
 node_port_base = 3000
+
+[deployment_config.tag_node_counts]
+worker = 16
+sequencer = 1
+storage = 3
+client = 3
 
 [node_config]
 
@@ -97,7 +103,7 @@ num_clients = 256
 num_storage_nodes = 3
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
+storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
 duration = 90
@@ -106,7 +112,8 @@ data_dir = "/data/"
 [experiments.sweeping_parameters]
 # num_nodes = [1, 15, 31, 63]
 # num_nodes = [10, 20, 30, 40, 45]
-num_nodes = [16, 32, 64, 128]
+# num_nodes = [16, 32, 64, 128]
+num_nodes = [1, 2, 4, 8, 16, 32]
 
 
 # [[experiments]]

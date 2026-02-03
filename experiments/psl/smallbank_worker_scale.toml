@@ -1,12 +1,18 @@
-workdir = "deployment_artifacts"
+workdir = "vldb_rev"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-provider = "aws"
-mode = "modest"
+# provider = "aws"
+mode = "max"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
 node_port_base = 3000
+
+[deployment_config.tag_node_counts]
+worker = 16
+sequencer = 1
+storage = 3
+client = 3
 
 [node_config]
 
@@ -100,14 +106,33 @@ name = "smallbank_psl"
 type = "psl_storage"
 # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
 repeats = 1
-num_clients = 256
+num_clients = 32
 # num_nodes = 15
 num_storage_nodes = 3
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
+storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
+duration = 90
+data_dir = "/data/"
+
+[experiments.sweeping_parameters]
+num_nodes = [1, 2, 4, 8, 16]
+
+[[experiments]]
+name = "smallbank_multilog"
+type = "psl_storage"
+# git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
+repeats = 1
+num_clients = 32
+# num_nodes = 15
+num_storage_nodes = 3
+num_sequencer_nodes = 1
+node_distribution = "tag:worker"
+storage_distribution = "tag:storage"
+sequencer_distribution = "tag:sequencer"
+build_command = "make multilog"
 duration = 90
 data_dir = "/data/"
 
@@ -120,13 +145,13 @@ name = "smallbank_nimble"
 type = "nimble"
 # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
 repeats = 1
-num_clients = 256
+num_clients = 32
 # num_nodes = 15
 num_storage_nodes = 0
 num_sequencer_nodes = 4 # 1 coordinator + 3 endorsers
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
-sequencer_distribution = "uniform"
+storage_distribution = "tag:storage"
+sequencer_distribution = "tag:sequencer"
 build_command = "make nimble"
 duration = 90
 data_dir = "/data/"
@@ -142,20 +167,20 @@ name = "smallbank_unprotected"
 type = "psl_storage"
 # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
 repeats = 1
-num_clients = 256
+num_clients = 32
 # num_nodes = 15
 num_storage_nodes = 0
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
-sequencer_distribution = "uniform"
+storage_distribution = "tag:storage"
+sequencer_distribution = "tag:sequencer"
 build_command = "make"
 duration = 90
 data_dir = "/data/"
 
 [experiments.sweeping_parameters]
 num_nodes = [1, 2, 4, 8, 16]
-# num_nodes = [30, 40, 50, 60]
+# # num_nodes = [30, 40, 50, 60]
 
 
 
@@ -164,15 +189,18 @@ name = "stacked_bar_graph"
 plotter = "stacked_bar_graph_psl"
 ramp_up = 10
 ramp_down = 10
-output = "worker_scale.pdf"
+output = "smallbank_worker_scale.pdf"
 force_parse = true
 # xlabels = ["1", "15", "31", "63"]
 xlabels = ["1", "2", "4", "8", "16"]
 xtitle = "Number of Nodes"
-legend_order = ["nimble", "psl", "unprotected"]
+legend_order = ["Nimble", "HarborMaster", "Multilog", "Unprotected"]
+# legend_order = ["HarborMaster", "Multilog"]
+# legend_order = ["Nimble"]
 
 
 [results.legends]
-smallbank_psl = "psl"
-smallbank_nimble = "nimble"
-smallbank_unprotected = "unprotected"
+smallbank_psl = "HarborMaster"
+smallbank_nimble = "Nimble"
+smallbank_unprotected = "Unprotected"
+smallbank_multilog = "Multilog"
