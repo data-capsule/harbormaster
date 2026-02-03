@@ -1079,7 +1079,7 @@ class Result:
         # plt.yticks(fontsize=80)
 
         if len(plot_dict_items) > 1:
-            plt.legend(loc="upper center", ncols=3, bbox_to_anchor=(0.5, 1.28), fontsize=60, columnspacing=0.3)
+            plt.legend(loc="upper center", ncols=4, bbox_to_anchor=(0.5, 1.2), fontsize=55, columnspacing=0.3)
         plt.grid(zorder=0)
 
         plt.gcf().set_size_inches(
