@@ -1,13 +1,19 @@
-workdir = "deployment_artifacts"
+workdir = "vldb_rev"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-provider = "aws"
-mode = "modest"
+# provider = "aws"
+mode = "max"
 # mode = "tiny"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
 node_port_base = 3000
+
+[deployment_config.tag_node_counts]
+worker = 16
+sequencer = 1
+storage = 3
+client = 3
 
 [node_config]
 
@@ -63,7 +69,8 @@ checkpoint_interval_ms = 1000
 [node_config.evil_config]
 simulate_byzantine_behavior = true
 byzantine_start_time_ms = 5_000
-
+rollbacked_response_ratio = 0.99
+rolledback_response_count = 1
 byzantine_start_block = 0
 
 
@@ -101,7 +108,7 @@ num_clients = 128
 num_storage_nodes = 3
 # num_sequencer_nodes = 1
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
+storage_distribution = "tag:storage"
 sequencer_distribution = "tag:worker" # Uniformity: All sequencers punished equally. 
 build_command = "make"
 duration = 90

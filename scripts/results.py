@@ -1277,7 +1277,7 @@ class Result:
             plt.xscale('log')
             # plt.yscale('log')
             plt.xticks(x, [str(int(x)) for x in x])
-            plt.yticks([0, 5, 10, 15, 20, 25, 30, 35])
+            plt.yticks([0, 5, 10, 15, 20, 25])
             plt.grid()
             output = self.kwargs.get('output', None)
             output = os.path.join(self.workdir, output)
