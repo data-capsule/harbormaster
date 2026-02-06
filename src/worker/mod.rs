@@ -338,6 +338,9 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         )));
 
         let bb_ts_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
+        let (rebroadcast_command_tx, rebroadcast_command_rx) = unbounded_channel();
+        let (broadcaster_commit_index_tx, broadcaster_commit_index_rx) = unbounded_channel();
+        
         let block_broadcaster_to_storage = Arc::new(Mutex::new(BlockBroadcaster::new(
             BroadcasterConfig::WorkerConfig(config.clone()),
             bb_ts_client,
@@ -347,8 +350,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             storage_broadcaster_rx,
             None,
             Some(staging_tx),
-            None,
-            None,
+            Some(broadcaster_commit_index_rx),
+            Some(rebroadcast_command_rx),
         )));
 
         #[cfg(feature = "nimble")]
@@ -364,6 +367,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             logserver_tx,
             commit_tx_spawner,
             gc_tx,
+            rebroadcast_command_tx,
+            broadcaster_commit_index_tx,
 
             #[cfg(feature = "nimble")]
             nimble_client,

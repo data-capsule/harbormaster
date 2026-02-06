@@ -3,13 +3,13 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use hashbrown::{HashMap, HashSet};
 #[cfg(feature = "nimble")]
 use tokio::sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, oneshot};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
 #[cfg(feature = "nimble")]
 use crate::{crypto::HashType, proto::client::ProtoClientRequest, rpc::{client::PinnedClient, PinnedMessage}};
 
 
-use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::{channel::{Receiver, Sender, make_channel}, timer::ResettableTimer}};
+use crate::{config::{AtomicPSLWorkerConfig, PSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::{channel::{Receiver, Sender, make_channel}, timer::ResettableTimer}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
 
@@ -44,6 +44,8 @@ pub struct Staging {
     commit_index: u64,
     gc_tx: Sender<(SenderType, u64)>,
     reconfig_timer: Arc<Pin<Box<ResettableTimer>>>,
+    rebroadcast_command_tx: UnboundedSender<Box<PSLWorkerConfig>>,
+    broadcaster_commit_index_tx: UnboundedSender<u64>,
 
     // #[cfg(feature = "nimble")]
     // nimble_client_tx: Sender<(Sender<()>, HashType)>,
@@ -66,6 +68,8 @@ impl Staging {
         vote_rx: Receiver<VoteWithSender>, block_rx: Receiver<CachedBlock>,
         block_broadcaster_to_other_workers_tx: Sender<u64>, logserver_tx: Sender<(SenderType, CachedBlock)>,
         client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>,
+        rebroadcast_command_tx: UnboundedSender<Box<PSLWorkerConfig>>,
+        broadcaster_commit_index_tx: UnboundedSender<u64>,
 
         #[cfg(feature = "nimble")]
         nimble_client: PinnedClient,
@@ -92,6 +96,8 @@ impl Staging {
             commit_index: 0,
             gc_tx,
             reconfig_timer,
+            rebroadcast_command_tx,
+            broadcaster_commit_index_tx,
 
             #[cfg(feature = "nimble")]
             nimble_client,
@@ -192,7 +198,7 @@ impl Staging {
         let mut _c = self.config.get();
         let new_c = Arc::make_mut(&mut _c);
         new_c.worker_config.storage_list = vec!["storage2".to_string()];
-        self.config.set(new_c.clone());
+        self.rebroadcast_command_tx.send(new_c.clone());
     }
 
     async fn preprocess_and_buffer_vote(&mut self, vote: VoteWithSender) {
@@ -247,6 +253,8 @@ impl Staging {
     }
 
     async fn notify_downstream(&mut self, new_ci: u64) {
+        self.broadcaster_commit_index_tx.send(new_ci);
+
         // Send all blocks > self.commit_index <= new_ci to the logserver.
         let me = self.config.get().net_config.name.clone();
         let me = SenderType::Auth(me, self.chain_id);
