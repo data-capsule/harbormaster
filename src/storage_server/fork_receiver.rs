@@ -3,7 +3,7 @@ use std::{collections::{HashMap, VecDeque}, io::Error, sync::Arc};
 use log::{debug, error, warn};
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::{client::{Client, PinnedClient}, SenderType}, utils::{channel::{Receiver, Sender}, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::{SenderType, client::{Client, PinnedClient}}, utils::{StorageServiceConnector, channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
 
 #[derive(Debug)]
 pub struct ContinuityStats {
@@ -170,9 +170,25 @@ impl ForkReceiver {
         let chain_id = fork.serialized_blocks[0].chain_id;
         let origin = SenderType::Auth(origin, chain_id);
  
-        let stats = self.continuity_stats
-            .entry(origin.clone())
-            .or_insert(VecDeque::new());
+        // let stats = self.continuity_stats
+        //     .entry(origin.clone())
+        //     .or_insert(VecDeque::new());
+
+        // If the entry is not in continuity_stats, we are just going to blindly believe the sender.
+        // This helps in reconfiguration, when the storage server starts from the middle of a chain.
+        if !self.continuity_stats.contains_key(&origin) {
+
+            let mut stats = VecDeque::new();
+            stats.push_back(ContinuityStats {
+                block_n: fork.serialized_blocks[0].n - 1,
+                block_hash: FutureHash::Immediate(
+                    get_parent_hash_in_proto_block_ser(&fork.serialized_blocks[0].serialized_body).unwrap()
+                ),
+            });
+            self.continuity_stats.insert(origin.clone(), stats);
+        }
+
+        let stats = self.continuity_stats.get_mut(&origin).unwrap();
     
         
         for block in fork.serialized_blocks.drain(..) {

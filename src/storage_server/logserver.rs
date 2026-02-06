@@ -156,17 +156,21 @@ impl LogServer {
     }
 
     async fn handle_block(&mut self, block: CachedBlock, sender: SenderType) {
+        let _must_check_continuity = self.fork_cache.contains_key(&sender);
+
         let fork = self.fork_cache.entry(sender.clone()).or_insert_with(VecDeque::new);
 
-        if fork.len() > 0 {
-            if fork.iter().last().unwrap().block.n + 1 != block.block.n {
-                warn!("Dropping block, continuity broken. Expected n = {}, got {}. Sender: {:?}", fork.iter().last().unwrap().block.n + 1, block.block.n, sender);
-                return;
-            }
-        } else {
-            if block.block.n != 1 {
-                warn!("Dropping block, continuity broken. Expected n = 1, got {}. Sender: {:?}", block.block.n, sender);
-                return;
+        if _must_check_continuity {
+            if fork.len() > 0 {
+                if fork.iter().last().unwrap().block.n + 1 != block.block.n {
+                    warn!("Dropping block, continuity broken. Expected n = {}, got {}. Sender: {:?}", fork.iter().last().unwrap().block.n + 1, block.block.n, sender);
+                    return;
+                }
+            } else {
+                if block.block.n != 1 {
+                    warn!("Dropping block, continuity broken. Expected n = 1, got {}. Sender: {:?}", block.block.n, sender);
+                    return;
+                }
             }
         }
 
