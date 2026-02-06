@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use hashbrown::{HashMap, HashSet};
 #[cfg(feature = "nimble")]
@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use crate::{crypto::HashType, proto::client::ProtoClientRequest, rpc::{client::PinnedClient, PinnedMessage}};
 
 
-use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::channel::{make_channel, Receiver, Sender}};
+use crate::{config::AtomicPSLWorkerConfig, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::{channel::{Receiver, Sender, make_channel}, timer::ResettableTimer}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
 
@@ -43,8 +43,7 @@ pub struct Staging {
 
     commit_index: u64,
     gc_tx: Sender<(SenderType, u64)>,
-
-    __did_reconfigure: bool,
+    reconfig_timer: Arc<Pin<Box<ResettableTimer>>>,
 
     // #[cfg(feature = "nimble")]
     // nimble_client_tx: Sender<(Sender<()>, HashType)>,
@@ -72,6 +71,8 @@ impl Staging {
         nimble_client: PinnedClient,
     ) -> Self {
 
+        let reconfig_timer = ResettableTimer::new(Duration::from_millis(5000));
+
         #[cfg(feature = "nimble")]
         let (nimble_request_sender_tx, nimble_request_sender_rx) = unbounded_channel();
 
@@ -90,8 +91,7 @@ impl Staging {
 
             commit_index: 0,
             gc_tx,
-
-            __did_reconfigure: false,
+            reconfig_timer,
 
             #[cfg(feature = "nimble")]
             nimble_client,
@@ -109,6 +109,9 @@ impl Staging {
 
     pub async fn run(staging: Arc<Mutex<Self>>) {
         let mut staging = staging.lock().await;
+        staging.reconfig_timer.run().await;
+
+
         #[cfg(feature = "nimble")]
         {
             
@@ -158,6 +161,9 @@ impl Staging {
     async fn worker(&mut self) {
         loop {
             tokio::select! {
+                _ = self.reconfig_timer.wait() => {
+                    self.handle_reconfig().await;
+                },
                 Some(vote) = self.vote_rx.recv() => {
                     self.preprocess_and_buffer_vote(vote).await;
                 },
@@ -169,6 +175,7 @@ impl Staging {
             let new_ci = self.try_commit_blocks();
 
             if new_ci > self.commit_index {
+                self.reconfig_timer.reset();
 
                 // Ordering here is important.
                 // notify_downstream() needs to know the old commit index.
@@ -179,6 +186,13 @@ impl Staging {
             self.clean_up_buffer();
         }
 
+    }
+
+    async fn handle_reconfig(&mut self) {
+        let mut _c = self.config.get();
+        let new_c = Arc::make_mut(&mut _c);
+        new_c.worker_config.storage_list = vec!["storage2".to_string()];
+        self.config.set(new_c.clone());
     }
 
     async fn preprocess_and_buffer_vote(&mut self, vote: VoteWithSender) {
@@ -222,14 +236,6 @@ impl Staging {
             if vote_set.len() >= self.get_commit_threshold() {
                 new_ci = block.block.n;
             }
-        }
-
-        if new_ci >= 200 && !self.__did_reconfigure {
-            let mut _c = self.config.get();
-            let new_c = Arc::make_mut(&mut _c);
-            new_c.worker_config.storage_list = vec!["storage2".to_string()];
-            self.config.set(new_c.clone());
-            self.__did_reconfigure = true;
         }
 
         new_ci

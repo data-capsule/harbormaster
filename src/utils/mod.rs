@@ -1,6 +1,9 @@
 mod atomic_struct;
 pub use atomic_struct::*;
 
+mod opt_receiver;
+pub use opt_receiver::*;
+
 mod agnostic_ref;
 pub use agnostic_ref::*;
 

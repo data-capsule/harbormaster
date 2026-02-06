@@ -347,6 +347,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             storage_broadcaster_rx,
             None,
             Some(staging_tx),
+            None,
+            None,
         )));
 
         #[cfg(feature = "nimble")]
@@ -376,6 +378,8 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             true,
             node_broadcaster_rx,
             Some(block_broadcaster_to_other_workers_deliver_rx),
+            None,
+            None,
             None,
         )));
 

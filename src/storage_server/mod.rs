@@ -208,7 +208,11 @@ impl StorageNode {
 
         let block_broadcaster_client = Client::new_atomic(config.clone(), keystore.clone(), false, 0).into();
 
-        let block_broadcaster = BlockBroadcaster::new(BroadcasterConfig::Config(config.clone()), block_broadcaster_client, BroadcastMode::SequencerStar, false, false, block_broadcaster_rx, None, None);
+        let block_broadcaster = BlockBroadcaster::new(
+            BroadcasterConfig::Config(config.clone()), block_broadcaster_client, BroadcastMode::SequencerStar, 
+            false, false, block_broadcaster_rx,
+            None, None, None, None
+        );
 
         Self {
             config,

@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::fence};
 
 use indexmap::IndexMap;
 use prost::Message;
-use tokio::{sync::Mutex, sync::oneshot};
-use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{client::PinnedClient, server::LatencyProfile, PinnedMessage, SenderType}, utils::channel::{Receiver, Sender}};
+use tokio::sync::{Mutex, mpsc::UnboundedReceiver, oneshot};
+use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig, PSLWorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{PinnedMessage, SenderType, client::PinnedClient, server::LatencyProfile}, utils::{OptReceiver, OptUnboundedReceiver, channel::{Receiver, Sender}}};
 
 
 pub enum BroadcastMode {
@@ -21,6 +21,7 @@ pub enum BroadcasterConfig {
     WorkerConfig(AtomicPSLWorkerConfig),
 }
 
+
 pub struct BlockBroadcaster {
     config: BroadcasterConfig,
     client: PinnedClient,
@@ -30,16 +31,27 @@ pub struct BlockBroadcaster {
     wait_for_signal: bool,
 
     block_rx: Receiver<oneshot::Receiver<CachedBlock>>,
-    wait_rx: Option<Receiver<u64>>,
+    wait_rx: OptReceiver<u64>,
     staging_tx: Option<Sender<CachedBlock>>,
 
     block_buffer: IndexMap<u64, CachedBlock>,
     deliver_index: u64,
 
+    commit_index_rx: OptUnboundedReceiver<u64>,
+    commit_index: u64,
+    rebroadcast_command_rx: OptUnboundedReceiver<Box<PSLWorkerConfig>>,
+    rebroadcast_buffer: IndexMap<u64, CachedBlock>,
 }
 
 impl BlockBroadcaster {
-    pub fn new(config: BroadcasterConfig, client: PinnedClient, broadcast_mode: BroadcastMode, forward_to_staging: bool, wait_for_signal: bool, block_rx: Receiver<oneshot::Receiver<CachedBlock>>, wait_rx: Option<Receiver<u64>>, staging_tx: Option<Sender<CachedBlock>>) -> Self {
+    pub fn new(
+        config: BroadcasterConfig, client: PinnedClient, broadcast_mode: BroadcastMode,
+        forward_to_staging: bool, wait_for_signal: bool,
+        block_rx: Receiver<oneshot::Receiver<CachedBlock>>, wait_rx: Option<Receiver<u64>>,
+        staging_tx: Option<Sender<CachedBlock>>,
+        commit_index_rx: Option<UnboundedReceiver<u64>>,
+        rebroadcast_command_rx: Option<UnboundedReceiver<Box<PSLWorkerConfig>>>,
+    ) -> Self {
         if let BroadcastMode::StorageStar | BroadcastMode::WorkerGossip = broadcast_mode {
             if let BroadcasterConfig::Config(_) = &config {
                 panic!("BroadcasterConfig::Config is not supported for SequencerStar or WorkerGossip");
@@ -59,10 +71,15 @@ impl BlockBroadcaster {
             forward_to_staging,
             wait_for_signal,
             block_rx,
-            wait_rx,
+            wait_rx: OptReceiver::new(wait_rx),
             staging_tx,
             block_buffer: IndexMap::new(),
             deliver_index: 0,
+
+            commit_index_rx: OptUnboundedReceiver::new(commit_index_rx),
+            rebroadcast_command_rx: OptUnboundedReceiver::new(rebroadcast_command_rx),
+            rebroadcast_buffer: IndexMap::new(),
+            commit_index: 0,
         }
     }
 
@@ -147,82 +164,144 @@ impl BlockBroadcaster {
 
     async fn worker(&mut self) {
         loop {
-            if self.wait_for_signal {
-                tokio::select! {
-                    Some(block_rx) = self.block_rx.recv() => {
-                        let block = block_rx.await.unwrap();
-                        self.block_buffer.insert(block.block.n, block);
+            // if self.wait_for_signal {
+            //     tokio::select! {
+            //         Some(block_rx) = self.block_rx.recv() => {
+            //             let block = block_rx.await.unwrap();
+            //             self.block_buffer.insert(block.block.n, block);
+            //         }
+            //         Some(idx) = self.wait_rx.as_ref().unwrap().recv() => {
+            //             if idx > self.deliver_index {
+            //                 self.deliver_index = idx;
+            //             }
+            //         }
+            //     }
+            // } else {
+            //     tokio::select! {
+            //         Some(block_rx) = self.block_rx.recv() => {
+            //             let block = block_rx.await.unwrap();
+            //             self.block_buffer.insert(block.block.n, block);
+            //         }
+            //     }
+            // }
+
+            tokio::select! {
+                Some(block_rx) = self.block_rx.recv() => {
+                    let block = block_rx.await.unwrap();
+                    self.block_buffer.insert(block.block.n, block);
+
+                    self.steady_state_broadcast().await;
+                }
+                Some(idx) = self.wait_rx.recv() => {
+                    if idx > self.deliver_index {
+                        self.deliver_index = idx;
                     }
-                    Some(idx) = self.wait_rx.as_ref().unwrap().recv() => {
-                        if idx > self.deliver_index {
-                            self.deliver_index = idx;
-                        }
-                    }
-                }
-            } else {
-                tokio::select! {
-                    Some(block_rx) = self.block_rx.recv() => {
-                        let block = block_rx.await.unwrap();
-                        self.block_buffer.insert(block.block.n, block);
-                    }
-                }
-            }
 
+                    self.steady_state_broadcast().await;
+                },
+                Some(commit_index) = self.commit_index_rx.recv() => {
+                    self.commit_index = commit_index;
 
-            
-            let peers = self.get_peers();
-            
-            let threshold = self.get_success_threshold();
-
-            
-            let mut blocks_to_broadcast = Vec::new();
-
-            for (n, block) in self.block_buffer.iter() {
-                if !block.block.origin.contains("god") {
-                    // God blocks are always delivered.
-                    if self.wait_for_signal {
-                        if *n > self.deliver_index {
-                            continue;
-                        }
-                    }
-                }
-
-                // let ae = self.wrap_block_for_broadcast(block);
-                blocks_to_broadcast.push(block.clone());
-                if self.forward_to_staging {
-                    let _ = self.staging_tx.as_ref().unwrap().send(block.clone()).await;
-                }
-            }
-
-            if peers.len() > 0 {
-
-                if blocks_to_broadcast.len() > 0 {
-
-                    let ae = self.wrap_block_for_broadcast(blocks_to_broadcast);
-                    
-                    let payload = ProtoPayload {
-                        message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
-                    };
-                    let data = payload.encode_to_vec();
-                    
-                    let sz = data.len();
-                    let data = PinnedMessage::from(data, sz, SenderType::Anon);
-                    
-                    let _ = PinnedClient::broadcast(
-                        &self.client,
-                        &peers, &data, 
-                        &mut LatencyProfile::new(),
-                        threshold
-                    ).await;
-                }
-            }
-                
-            if self.wait_for_signal {
-                self.block_buffer.retain(|n, _| *n > self.deliver_index);
-            } else {
-                self.block_buffer.clear();
+                    self.rebroadcast_buffer.retain(|n, _| *n > commit_index);
+                },
+                Some(new_config) = self.rebroadcast_command_rx.recv() => {
+                    self.reconfigure_and_rebroadcast(new_config).await;
+                },
             }
         }
+    }
+
+    async fn __broadcast(&mut self, blocks_to_broadcast: Vec<CachedBlock>) {
+        let peers = self.get_peers();
         
+        let threshold = self.get_success_threshold();
+
+
+        if peers.len() > 0 {
+
+            if blocks_to_broadcast.len() > 0 {
+                if self.commit_index_rx.is_some() {
+                    // Store in rebroadcast buffer
+                    blocks_to_broadcast.iter().for_each(|block| {
+                        self.rebroadcast_buffer.insert(block.block.n, block.clone());
+                    });
+                }
+
+                let ae = self.wrap_block_for_broadcast(blocks_to_broadcast);
+                
+                let payload = ProtoPayload {
+                    message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
+                };
+                let data = payload.encode_to_vec();
+                
+                let sz = data.len();
+                let data = PinnedMessage::from(data, sz, SenderType::Anon);
+                
+                let _ = PinnedClient::broadcast(
+                    &self.client,
+                    &peers, &data, 
+                    &mut LatencyProfile::new(),
+                    threshold
+                ).await;
+            }
+        }
+    }
+    
+
+    async fn steady_state_broadcast(&mut self) {
+        
+        
+        let mut blocks_to_broadcast = Vec::new();
+
+        for (n, block) in self.block_buffer.iter() {
+            if !block.block.origin.contains("god") {
+                // God blocks are always delivered.
+                if self.wait_for_signal {
+                    if *n > self.deliver_index {
+                        continue;
+                    }
+                }
+            }
+
+            // let ae = self.wrap_block_for_broadcast(block);
+            blocks_to_broadcast.push(block.clone());
+            if self.forward_to_staging {
+                let _ = self.staging_tx.as_ref().unwrap().send(block.clone()).await;
+            }
+        }
+
+        self.__broadcast(blocks_to_broadcast).await;
+            
+        if self.wait_for_signal {
+            self.block_buffer.retain(|n, _| *n > self.deliver_index);
+        } else {
+            self.block_buffer.clear();
+        }
+    }
+
+    async fn reconfigure_and_rebroadcast(&mut self, new_config: Box<PSLWorkerConfig>) {
+        self.reconfigure(new_config);
+
+        // Fence here to prevent reordering.
+        fence(std::sync::atomic::Ordering::SeqCst);
+        
+        self.rebroadcast().await;
+    }
+
+    fn reconfigure(&mut self, new_config: Box<PSLWorkerConfig>) {
+        match &mut self.config {
+            BroadcasterConfig::Config(config) => {
+                panic!("BroadcasterConfig::Config is not supported for reconfigure");
+            }
+            BroadcasterConfig::WorkerConfig(config) => {
+                config.set(new_config.clone());
+            }
+        }
+    }
+
+    async fn rebroadcast(&mut self) {
+        let blocks_to_broadcast = self.rebroadcast_buffer.iter().map(|(n, block)| block.clone()).collect();
+
+        self.__broadcast(blocks_to_broadcast).await;
     }
 }
