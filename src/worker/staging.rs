@@ -44,6 +44,8 @@ pub struct Staging {
     commit_index: u64,
     gc_tx: Sender<(SenderType, u64)>,
 
+    __did_reconfigure: bool,
+
     // #[cfg(feature = "nimble")]
     // nimble_client_tx: Sender<(Sender<()>, HashType)>,
 
@@ -88,6 +90,8 @@ impl Staging {
 
             commit_index: 0,
             gc_tx,
+
+            __did_reconfigure: false,
 
             #[cfg(feature = "nimble")]
             nimble_client,
@@ -218,6 +222,14 @@ impl Staging {
             if vote_set.len() >= self.get_commit_threshold() {
                 new_ci = block.block.n;
             }
+        }
+
+        if new_ci >= 200 && !self.__did_reconfigure {
+            let mut _c = self.config.get();
+            let new_c = Arc::make_mut(&mut _c);
+            new_c.worker_config.storage_list = vec!["storage2".to_string()];
+            self.config.set(new_c.clone());
+            self.__did_reconfigure = true;
         }
 
         new_ci

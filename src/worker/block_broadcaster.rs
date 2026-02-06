@@ -168,19 +168,10 @@ impl BlockBroadcaster {
                 }
             }
 
+
             
             let peers = self.get_peers();
-            let peers = match self.broadcast_mode {
-                BroadcastMode::StorageStar => {
-                    if self.block_buffer.len() > 0 && *self.block_buffer.iter().last().unwrap().0 >= 200 {
-                        vec!["storage2".to_string()]
-                    }
-                    else {
-                        peers
-                    }
-                }
-                _ => peers,
-            };
+            
             let threshold = self.get_success_threshold();
 
             
