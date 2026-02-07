@@ -26,5 +26,8 @@ message ProtoPayload {
 
         proto.consensus.ProtoHeartbeat heartbeat = 9;
 
+        proto.consensus.ProtoReconfiguration reconfiguration = 10;
+        proto.consensus.ProtoReconfigurationSignal reconfiguration_signal = 11;
+
     }
 }

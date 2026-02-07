@@ -3,6 +3,7 @@ mod auditor;
 mod controller;
 mod lockserver;
 mod heartbeat_handler;
+mod reconfiguration_coordinator;
 
 
 use std::{io::{Error, ErrorKind}, ops::Deref, pin::Pin, sync::Arc};
@@ -11,7 +12,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{consensus::{ProtoAppendEntries, ProtoHeartbeat, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}}, utils::{channel::{make_channel, Receiver, Sender}, BlackHoleStorageEngine, StorageService}};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{consensus::{ProtoAppendEntries, ProtoHeartbeat, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}, reconfiguration_coordinator::ReconfigurationCoordinator}, utils::{BlackHoleStorageEngine, StorageService, channel::{Receiver, Sender, make_channel}}};
 use crate::storage_server::fork_receiver::ForkReceiver;
 use crate::storage_server::staging::Staging;
 
@@ -22,6 +23,7 @@ pub struct SequencerContext {
     lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
     heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
     heartbeat_handler_tx: UnboundedSender<(ProtoHeartbeat, SenderType)>,
+    reconfiguration_coordinator_tx: Sender<ProtoReconfigurationSignal>,
 }
 
 #[derive(Clone)]
@@ -35,6 +37,7 @@ impl PinnedSequencerContext {
         lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
         heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
         heartbeat_handler_tx: UnboundedSender<(ProtoHeartbeat, SenderType)>,
+        reconfiguration_coordinator_tx: Sender<ProtoReconfigurationSignal>,
     ) -> Self {
         let context = SequencerContext {
             config,
@@ -43,6 +46,7 @@ impl PinnedSequencerContext {
             lock_server_tx,
             heartbeat_tx,
             heartbeat_handler_tx,
+            reconfiguration_coordinator_tx,
         };
         Self(Arc::new(Box::pin(context)))
     }
@@ -117,6 +121,12 @@ impl ServerContextType for PinnedSequencerContext {
             //     return Ok(RespType::NoResp);
             // },
 
+            crate::proto::rpc::proto_payload::Message::ReconfigurationSignal(proto_reconfiguration_signal) => {
+                self.reconfiguration_coordinator_tx.send(proto_reconfiguration_signal).await
+                    .expect("Channel send error");
+                return Ok(RespType::NoResp);
+            }
+
             _ => {
                 // Drop
             }
@@ -144,6 +154,7 @@ pub struct SequencerNode {
     lock_server: Arc<Mutex<LockServer>>,
     controller: Arc<Mutex<Controller>>,
     heartbeat_handler: Arc<Mutex<HeartbeatHandler>>,
+    reconfiguration_coordinator: Arc<Mutex<ReconfigurationCoordinator>>,
 }
 
 impl SequencerNode {
@@ -176,6 +187,7 @@ impl SequencerNode {
         let storage = StorageService::new(config.clone(), BlackHoleStorageEngine{}, _chan_depth);
         let (heartbeat_tx, heartbeat_rx) = make_channel(_chan_depth);
         let (heartbeat_handler_tx, heartbeat_handler_rx) = unbounded_channel();
+        let (reconfiguration_coordinator_tx, reconfiguration_coordinator_rx) = make_channel(_chan_depth);
 
         let ctx = PinnedSequencerContext::new(
             config.clone(),
@@ -184,6 +196,7 @@ impl SequencerNode {
             lock_server_tx, 
             heartbeat_tx,
             heartbeat_handler_tx,
+            reconfiguration_coordinator_tx,
         );
         let server = Server::new_atomic(config.clone(), ctx, keystore.clone());
 
@@ -211,6 +224,8 @@ impl SequencerNode {
         let controller_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
         let controller = Controller::new(config.clone(), controller_client.into(), heartbeat_handler_controller_rx, lock_server_controller_rx);
 
+        let reconfiguration_coordinator = ReconfigurationCoordinator::new(config.clone(), keystore.clone(), reconfiguration_coordinator_rx);
+
         Self {
             config,
             keystore,
@@ -224,6 +239,7 @@ impl SequencerNode {
             controller: Arc::new(Mutex::new(controller)),
             lock_server: Arc::new(Mutex::new(lock_server)),
             heartbeat_handler: Arc::new(Mutex::new(heartbeat_handler)),
+            reconfiguration_coordinator: Arc::new(Mutex::new(reconfiguration_coordinator)),
         }
 
     }
@@ -240,6 +256,7 @@ impl SequencerNode {
         let controller = self.controller.clone();
         let lock_server = self.lock_server.clone();
         let heartbeat_handler = self.heartbeat_handler.clone();
+        let reconfiguration_coordinator = self.reconfiguration_coordinator.clone();
 
         handles.spawn(async move {
             let mut storage = storage.lock().await;
@@ -271,6 +288,9 @@ impl SequencerNode {
         });
         handles.spawn(async move {
             HeartbeatHandler::run(heartbeat_handler).await;
+        });
+        handles.spawn(async move {
+            ReconfigurationCoordinator::run(reconfiguration_coordinator).await;
         });
         handles
     }
