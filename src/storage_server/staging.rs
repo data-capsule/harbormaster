@@ -1,13 +1,14 @@
-use std::{io::Error, pin::Pin, sync::Arc, u64};
+use std::{io::Error, pin::Pin, process::exit, sync::Arc, u64};
 
 use hashbrown::HashMap;
-use log::{debug, error};
+use log::{debug, error, warn};
 use prost::Message as _;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::{ProtoAuthSenderType, ProtoBackfillQuery}, consensus::ProtoVote, rpc::ProtoPayload}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock}, proto::{checkpoint::{ProtoAuthSenderType, ProtoBackfillQuery}, consensus::{ProtoReconfiguration, ProtoReconfigurationStorageVote, ProtoVote}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::{Client, PinnedClient}}, utils::{channel::{Receiver, Sender}, timer::ResettableTimer}};
 
 use super::fork_receiver::ForkReceiverCommand;
+use crate::utils::OptReceiver;
 
 pub struct Staging {
     config: AtomicConfig,
@@ -23,6 +24,9 @@ pub struct Staging {
     block_broadcaster_tx: Option<Sender<oneshot::Receiver<CachedBlock>>>,
 
     must_vote: bool, // Disabled in the sequencer.
+
+    is_defunct: bool,
+    reconfiguration_rx: OptReceiver<(SenderType, ProtoReconfiguration)>,
 }
 
 const PER_PEER_BLOCK_WSS: u64 = 1_000;
@@ -33,6 +37,7 @@ impl Staging {
         block_rx: tokio::sync::mpsc::Receiver<(oneshot::Receiver<Result<CachedBlock, Error>>, SenderType /* sender */, SenderType /* origin */)>, // Sender may not be equal to origin.
         logserver_tx: Sender<(SenderType, CachedBlock)>,
         gc_tx: Option<Sender<(SenderType, u64)>>,
+        reconfiguration_rx: OptReceiver<(SenderType, ProtoReconfiguration)>,
         fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
         block_broadcaster_tx: Option<Sender<oneshot::Receiver<CachedBlock>>>,
         must_vote: bool,
@@ -54,6 +59,9 @@ impl Staging {
             gc_timer,
             block_broadcaster_tx,
             must_vote,
+
+            is_defunct: false,
+            reconfiguration_rx,
         }
     }
 
@@ -74,9 +82,47 @@ impl Staging {
                 self.handle_gc().await?;
             },
             block_and_sender_and_origin = self.block_rx.recv() => {
+                if self.is_defunct {
+                    warn!("Received block after defunct signal. Dropping block.");
+                    return Ok(());
+                }
                 self.handle_block(block_and_sender_and_origin).await?;
             }
+            Some((sender, proto_reconfiguration)) = self.reconfiguration_rx.recv() => {
+                self.handle_death(sender, proto_reconfiguration).await?;
+            }
         }
+        Ok(())
+    }
+
+    async fn handle_death(&mut self, sender: SenderType, proto_reconfiguration: ProtoReconfiguration) -> Result<(), ()> {
+        if proto_reconfiguration.kill {
+            warn!("Received kill signal. Dying forcefully.");
+            exit(0);
+        }
+        self.is_defunct = true;
+
+        let my_name = self.config.get().net_config.name.clone();
+        let (sender_name, _) = sender.to_name_and_sub_id();
+
+        let vote = ProtoReconfigurationStorageVote {
+            storage_server_name: my_name.clone(),
+        };
+
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::ReconfigurationStorageVote(vote)),
+        };
+
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+
+        log::info!("Sending reconfiguration storage vote from {} to {}", my_name, sender_name);
+        let _ = PinnedClient::send(
+            &self.client,
+            &sender_name,
+            MessageRef(&buf, sz, &SenderType::Anon),
+        ).await;
+
         Ok(())
     }
 

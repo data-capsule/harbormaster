@@ -148,8 +148,13 @@ message ProtoHeartbeat {
 
 message ProtoReconfiguration {
     bool stop_acks = 1;
+    bool kill = 2;
 }
 
 message ProtoReconfigurationSignal {
     repeated string new_storage_servers = 1;
+}
+
+message ProtoReconfigurationStorageVote {
+    string storage_server_name = 1;
 }

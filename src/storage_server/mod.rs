@@ -8,7 +8,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::ProtoAppendEntries, rpc::ProtoPayload}, rpc::{client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}, MessageRef, SenderType}, utils::{channel::{make_channel, Receiver, Sender}, InMemoryStorageEngine, RocksDBStorageEngine, StorageService}, worker::block_broadcaster::BroadcasterConfig};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::{ProtoAppendEntries, ProtoReconfiguration}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, utils::{InMemoryStorageEngine, OptReceiver, RocksDBStorageEngine, StorageService, channel::{Receiver, Sender, make_channel}}, worker::block_broadcaster::BroadcasterConfig};
 use fork_receiver::ForkReceiver;
 use staging::Staging;
 use logserver::LogServer;
@@ -19,6 +19,7 @@ pub struct StorageServerContext {
     keystore: AtomicKeyStore,
     fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
     backfill_request_tx: Sender<ProtoBackfillQuery>,
+    reconfiguration_tx: Sender<(SenderType, ProtoReconfiguration)>,
 }
 
 #[derive(Clone)]
@@ -30,12 +31,14 @@ impl PinnedStorageServerContext {
         keystore: AtomicKeyStore,
         fork_receiver_tx: Sender<(ProtoAppendEntries, SenderType)>,
         backfill_request_tx: Sender<ProtoBackfillQuery>,
+        reconfiguration_tx: Sender<(SenderType, ProtoReconfiguration)>,
     ) -> Self {
         let context = StorageServerContext {
             config,
             keystore,
             fork_receiver_tx,
             backfill_request_tx,
+            reconfiguration_tx,
         };
         Self(Arc::new(Box::pin(context)))
     }
@@ -92,6 +95,12 @@ impl ServerContextType for PinnedStorageServerContext {
                     .expect("Channel send error");
                 return Ok(RespType::NoResp);
             },
+            crate::proto::rpc::proto_payload::Message::Reconfiguration(proto_reconfiguration) => {
+                self.reconfiguration_tx.send((sender, proto_reconfiguration)).await
+                    .expect("Channel send error");
+                return Ok(RespType::NoResp);
+            },
+
 
             _ => {
                 // Drop
@@ -160,11 +169,14 @@ impl StorageNode {
             },
         };
 
+        let (reconfiguration_tx, reconfiguration_rx) = make_channel(_chan_depth);
+
         let ctx = PinnedStorageServerContext::new(
             config.clone(),
             keystore.clone(),
             fork_receiver_tx.clone(),
             backfill_request_tx.clone(),
+            reconfiguration_tx
         );
         let server = Server::new_atomic(config.clone(), ctx, keystore.clone());
 
@@ -201,7 +213,7 @@ impl StorageNode {
 
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), true, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
 
-        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, Some(gc_tx), fork_receiver_cmd_tx, Some(block_broadcaster_tx), true);
+        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, Some(gc_tx), OptReceiver::some(reconfiguration_rx), fork_receiver_cmd_tx, Some(block_broadcaster_tx), true);
 
         let logserver_storage = storage.get_connector(crypto.get_connector());
         let logserver = LogServer::new(config.clone(), keystore.clone(), logserver_storage, gc_rx, logserver_rx, backfill_request_rx, None);

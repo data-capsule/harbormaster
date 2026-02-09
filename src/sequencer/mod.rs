@@ -12,7 +12,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{consensus::{ProtoAppendEntries, ProtoHeartbeat, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}, reconfiguration_coordinator::ReconfigurationCoordinator}, utils::{BlackHoleStorageEngine, StorageService, channel::{Receiver, Sender, make_channel}}};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{consensus::{ProtoAppendEntries, ProtoHeartbeat, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}, reconfiguration_coordinator::{ReconfigurationCoordinator, ReconfigurationMessage}}, utils::{BlackHoleStorageEngine, OptReceiver, StorageService, channel::{Receiver, Sender, make_channel}}};
 use crate::storage_server::fork_receiver::ForkReceiver;
 use crate::storage_server::staging::Staging;
 
@@ -23,7 +23,7 @@ pub struct SequencerContext {
     lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
     heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
     heartbeat_handler_tx: UnboundedSender<(ProtoHeartbeat, SenderType)>,
-    reconfiguration_coordinator_tx: Sender<ProtoReconfigurationSignal>,
+    reconfiguration_coordinator_tx: Sender<ReconfigurationMessage>,
 }
 
 #[derive(Clone)]
@@ -37,7 +37,7 @@ impl PinnedSequencerContext {
         lock_server_tx: UnboundedSender<(Vec<LockServerCommand>, SenderType, MsgAckChan, u64)>,
         heartbeat_tx: Sender<(ProtoHeartbeat, SenderType)>,
         heartbeat_handler_tx: UnboundedSender<(ProtoHeartbeat, SenderType)>,
-        reconfiguration_coordinator_tx: Sender<ProtoReconfigurationSignal>,
+        reconfiguration_coordinator_tx: Sender<ReconfigurationMessage>,
     ) -> Self {
         let context = SequencerContext {
             config,
@@ -122,11 +122,16 @@ impl ServerContextType for PinnedSequencerContext {
             // },
 
             crate::proto::rpc::proto_payload::Message::ReconfigurationSignal(proto_reconfiguration_signal) => {
-                self.reconfiguration_coordinator_tx.send(proto_reconfiguration_signal).await
+                self.reconfiguration_coordinator_tx.send(ReconfigurationMessage::Signal(proto_reconfiguration_signal)).await
                     .expect("Channel send error");
                 return Ok(RespType::NoResp);
             }
 
+            crate::proto::rpc::proto_payload::Message::ReconfigurationStorageVote(proto_reconfiguration_storage_vote) => {
+                self.reconfiguration_coordinator_tx.send(ReconfigurationMessage::StorageVote(proto_reconfiguration_storage_vote)).await
+                    .expect("Channel send error");
+                return Ok(RespType::NoResp);
+            }
             _ => {
                 // Drop
             }
@@ -208,7 +213,7 @@ impl SequencerNode {
         let (auditor_tx, auditor_rx) = tokio::sync::mpsc::unbounded_channel(); // make_channel(_chan_depth);
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), false, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
 
-        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, fork_receiver_cmd_tx, None, false);
+        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, OptReceiver::none(), fork_receiver_cmd_tx, None, false);
         let commit_buffer = CommitBuffer::new(config.clone(), logserver_rx, auditor_tx);
 
         let auditor = Auditor::new(config.clone(), auditor_rx);
