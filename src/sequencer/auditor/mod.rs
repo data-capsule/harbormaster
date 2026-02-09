@@ -62,7 +62,10 @@ pub struct Auditor {
 }
 
 impl Auditor {
-    pub fn new(config: AtomicConfig, block_rx: tokio::sync::mpsc::UnboundedReceiver<CachedBlock>) -> Self {
+    pub fn new(
+        config: AtomicConfig, block_rx: tokio::sync::mpsc::UnboundedReceiver<CachedBlock>,
+        reconfiguration_coordinator_tx: UnboundedSender<(String /* worker name */, u64 /* seq num */)>
+    ) -> Self {
         let _config = config.get();
         let _chan_depth = _config.rpc_config.channel_depth as usize;
 
@@ -87,7 +90,8 @@ impl Auditor {
             Arc::new(Mutex::new(
                 PerWorkerAuditor::new(
                     config.clone(), name.clone(), rx,
-                    gc_tx.clone(), min_gc_rx, snapshot_store.clone()
+                    gc_tx.clone(), min_gc_rx, snapshot_store.clone(),
+                    reconfiguration_coordinator_tx.clone()
                 )
             ))
         }).collect();

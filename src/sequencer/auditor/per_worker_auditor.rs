@@ -50,10 +50,19 @@ pub struct PerWorkerAuditor {
     __audit_block_time_sum: Duration,
     __gen_snapshot_time_sum: Duration,
     __verify_reads_time_sum: Duration,
+
+    highest_audited_seq_num: u64,
+    reconfiguration_coordinator_tx: UnboundedSender<(String /* worker name */, u64 /* seq num */)>,
 }
 
 impl PerWorkerAuditor {
-    pub fn new(config: AtomicConfig, worker_name: String, block_rx: Receiver<CachedBlock>, gc_tx: UnboundedSender<(String, VectorClock, Vec<(CacheKey, CachedValue)>)>, min_gc_rx: UnboundedReceiver<VectorClock>, snapshot_store: SnapshotStore) -> Self {
+    pub fn new(
+        config: AtomicConfig, worker_name: String,
+        block_rx: Receiver<CachedBlock>, gc_tx: UnboundedSender<(String, VectorClock, Vec<(CacheKey, CachedValue)>)>,
+        min_gc_rx: UnboundedReceiver<VectorClock>,
+        snapshot_store: SnapshotStore,
+        reconfiguration_coordinator_tx: UnboundedSender<(String /* worker name */, u64 /* seq num */)>
+    ) -> Self {
         let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
 
         let _config = config.get();
@@ -95,6 +104,9 @@ impl PerWorkerAuditor {
 
             __fetched_from_snapshot_store_count: 0,
             __fetched_from_cache_count: 0,
+
+            highest_audited_seq_num: 0,
+            reconfiguration_coordinator_tx,
         }
     }
 
@@ -238,8 +250,14 @@ impl PerWorkerAuditor {
 
             if can_audit {
                 let block = self.unaudited_buffer.pop_front().unwrap();
+                let __n = block.block.n;
                 self.do_audit_block(block, all_read_vcs).await;
                 audit_successful = true;
+
+                if __n > self.highest_audited_seq_num {
+                    self.highest_audited_seq_num = __n;
+                    self.reconfiguration_coordinator_tx.send((self.worker_name.clone(), __n)).unwrap();
+                }
             } else {
                 break;
             }

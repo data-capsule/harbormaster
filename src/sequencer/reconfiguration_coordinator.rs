@@ -1,5 +1,6 @@
 use std::{collections::{HashMap, HashSet}, sync::Arc};
 
+use tokio::sync::mpsc::UnboundedReceiver;
 use log::{info, warn};
 use prost::Message as _;
 use tokio::sync::Mutex;
@@ -27,6 +28,7 @@ pub struct ReconfigurationCoordinator {
     config: AtomicConfig,
     client: PinnedClient,
     signal_rx: Receiver<ReconfigurationMessage>,
+    ci_rx: UnboundedReceiver<(String /* worker name */, u64 /* seq num */)>,
 
     /// Starts at 0, that's the first config everybody starts with.
     config_num_counter: u64,
@@ -43,6 +45,7 @@ impl ReconfigurationCoordinator {
         config: AtomicConfig,
         keystore: AtomicKeyStore,
         signal_rx: Receiver<ReconfigurationMessage>,
+        ci_rx: UnboundedReceiver<(String /* worker name */, u64 /* seq num */)>,
     ) -> Self {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0).into();
         let commit_indices = config.get().consensus_config.watchlist.iter().map(|worker| (worker.clone(), 0)).collect();
@@ -51,6 +54,7 @@ impl ReconfigurationCoordinator {
             config,
             client,
             signal_rx,
+            ci_rx,
 
             config_num_counter: 0,
             current_reconfiguration: None,
@@ -65,6 +69,11 @@ impl ReconfigurationCoordinator {
     }
 
     async fn worker(&mut self) -> Result<(), ()> {
+        if self.ci_rx.len() > 0 {
+            let mut ci_rx_buffer = Vec::with_capacity(self.ci_rx.len());
+            self.ci_rx.recv_many(&mut ci_rx_buffer, self.ci_rx.len()).await;
+            self.handle_new_commits(ci_rx_buffer).await;
+        }
         let signal = self.signal_rx.recv().await;
         match signal {
             Some(ReconfigurationMessage::Signal(signal)) => {
@@ -80,6 +89,13 @@ impl ReconfigurationCoordinator {
                 Ok(())
             }
             None => Err(()),
+        }
+    }
+
+    async fn handle_new_commits(&mut self, commits: Vec<(String /* worker name */, u64 /* seq num */)>) {
+        for (worker_name, seq_num) in &commits {
+            self.commit_indices.insert(worker_name.clone(), *seq_num);
+            self.maybe_reply_to_buffered_query(worker_name.clone()).await;
         }
     }
 
@@ -306,9 +322,9 @@ impl ReconfigurationCoordinator {
 
         let current_ci = *self.commit_indices.get(&name).unwrap();
 
-        // if current_ci >= target_ci {
+        if current_ci >= target_ci {
             self.reply_to_buffered_query(name).await;
-        // }
+        }
     }
 
     async fn reply_to_buffered_query(&mut self, name: String) {

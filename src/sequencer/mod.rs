@@ -222,7 +222,9 @@ impl SequencerNode {
         let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, OptReceiver::none(), fork_receiver_cmd_tx, None, false);
         let commit_buffer = CommitBuffer::new(config.clone(), logserver_rx, auditor_tx);
 
-        let auditor = Auditor::new(config.clone(), auditor_rx);
+        let (reconfiguration_coordinator_ci_tx, reconfiguration_coordinator_ci_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let auditor = Auditor::new(config.clone(), auditor_rx, reconfiguration_coordinator_ci_tx);
 
         let (lock_server_controller_tx, lock_server_controller_rx) = make_channel(_chan_depth);
         let lock_server = LockServer::new(config.clone(), heartbeat_handler_rx, lock_server_rx, lock_server_controller_tx);
@@ -235,7 +237,7 @@ impl SequencerNode {
         let controller_client = Client::new_atomic(config.clone(), keystore.clone(), true, 0);
         let controller = Controller::new(config.clone(), controller_client.into(), heartbeat_handler_controller_rx, lock_server_controller_rx);
 
-        let reconfiguration_coordinator = ReconfigurationCoordinator::new(config.clone(), keystore.clone(), reconfiguration_coordinator_rx);
+        let reconfiguration_coordinator = ReconfigurationCoordinator::new(config.clone(), keystore.clone(), reconfiguration_coordinator_rx, reconfiguration_coordinator_ci_rx);
 
         Self {
             config,
