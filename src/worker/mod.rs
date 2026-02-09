@@ -357,7 +357,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
         #[cfg(feature = "nimble")]
         let nimble_client = Client::new_atomic(og_config.clone(), keystore.clone(), true, 0xdeadbeef).into();
 
-
+        let reconfiguration_client = Client::new_atomic(og_config.clone(), keystore.clone(), false, 0).into();
         let staging = Arc::new(Mutex::new(Staging::new(
             config.clone(), 0,
             crypto.get_connector(),
@@ -369,6 +369,7 @@ impl<E: ClientHandlerTask + Send + Sync + 'static> PSLWorker<E> {
             gc_tx,
             rebroadcast_command_tx,
             broadcaster_commit_index_tx,
+            reconfiguration_client,
 
             #[cfg(feature = "nimble")]
             nimble_client,

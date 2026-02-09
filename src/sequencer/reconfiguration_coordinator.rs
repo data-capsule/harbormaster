@@ -306,9 +306,9 @@ impl ReconfigurationCoordinator {
 
         let current_ci = *self.commit_indices.get(&name).unwrap();
 
-        if current_ci >= target_ci {
+        // if current_ci >= target_ci {
             self.reply_to_buffered_query(name).await;
-        }
+        // }
     }
 
     async fn reply_to_buffered_query(&mut self, name: String) {

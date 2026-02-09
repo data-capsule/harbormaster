@@ -1,6 +1,8 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
 use hashbrown::{HashMap, HashSet};
+use log::{error, warn};
+use prost::Message as _;
 #[cfg(feature = "nimble")]
 use tokio::sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, oneshot};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
@@ -9,7 +11,7 @@ use tokio::sync::{Mutex, mpsc::UnboundedSender};
 use crate::{crypto::HashType, proto::client::ProtoClientRequest, rpc::{client::PinnedClient, PinnedMessage}};
 
 
-use crate::{config::{AtomicPSLWorkerConfig, PSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector}, proto::consensus::ProtoVote, rpc::SenderType, utils::{channel::{Receiver, Sender, make_channel}, timer::ResettableTimer}};
+use crate::{config::{AtomicPSLWorkerConfig, PSLWorkerConfig}, crypto::{CachedBlock, CryptoServiceConnector}, proto::{consensus::{ProtoCurrentConfigurationQuery, ProtoCurrentConfigurationReply, ProtoVote}, rpc::ProtoPayload}, rpc::{PinnedMessage, SenderType, client::PinnedClient}, utils::{channel::{Receiver, Sender, make_channel}, timer::ResettableTimer}};
 
 pub type VoteWithSender = (SenderType, ProtoVote);
 
@@ -46,6 +48,8 @@ pub struct Staging {
     reconfig_timer: Arc<Pin<Box<ResettableTimer>>>,
     rebroadcast_command_tx: UnboundedSender<Box<PSLWorkerConfig>>,
     broadcaster_commit_index_tx: UnboundedSender<u64>,
+    config_num: u64,
+    reconfiguration_client: PinnedClient,
 
     // #[cfg(feature = "nimble")]
     // nimble_client_tx: Sender<(Sender<()>, HashType)>,
@@ -70,13 +74,13 @@ impl Staging {
         client_reply_tx: tokio::sync::broadcast::Sender<u64>, gc_tx: Sender<(SenderType, u64)>,
         rebroadcast_command_tx: UnboundedSender<Box<PSLWorkerConfig>>,
         broadcaster_commit_index_tx: UnboundedSender<u64>,
+        reconfiguration_client: PinnedClient,
 
         #[cfg(feature = "nimble")]
         nimble_client: PinnedClient,
     ) -> Self {
 
         let reconfig_timer = ResettableTimer::new(Duration::from_millis(5000));
-
         #[cfg(feature = "nimble")]
         let (nimble_request_sender_tx, nimble_request_sender_rx) = unbounded_channel();
 
@@ -98,6 +102,8 @@ impl Staging {
             reconfig_timer,
             rebroadcast_command_tx,
             broadcaster_commit_index_tx,
+            config_num: 0,
+            reconfiguration_client,
 
             #[cfg(feature = "nimble")]
             nimble_client,
@@ -168,7 +174,7 @@ impl Staging {
         loop {
             tokio::select! {
                 _ = self.reconfig_timer.wait() => {
-                    self.handle_reconfig().await;
+                    self.maybe_reconfigure().await;
                 },
                 Some(vote) = self.vote_rx.recv() => {
                     self.preprocess_and_buffer_vote(vote).await;
@@ -194,11 +200,45 @@ impl Staging {
 
     }
 
-    async fn handle_reconfig(&mut self) {
+    async fn maybe_reconfigure(&mut self) {
+        // Step 1: Get new config from reconfiguration coordinator.
+        const COORDINATOR_NAME: &str = "sequencer1";
+        let query = ProtoCurrentConfigurationQuery {
+            commit_index: self.commit_index,
+        };
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::CurrentConfigurationQuery(query)),
+        };
+        let buf = payload.encode_to_vec();
+        let sz = buf.len();
+        let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
+        let reply = PinnedClient::send_and_await_reply(
+            &self.reconfiguration_client, &COORDINATOR_NAME.to_string(), 
+            msg.as_ref()
+        ).await;
+        if reply.is_err() {
+            error!("Failed to send reconfiguration query to coordinator. Dropping. Error: {:?}", reply.err().unwrap());
+            return;
+        }
+        let reply = reply.unwrap();
+        let reply = ProtoCurrentConfigurationReply::decode(&reply.as_ref().0.as_slice()[0..reply.as_ref().1]);
+        if reply.is_err() {
+            error!("Failed to decode reconfiguration reply. Dropping. Error: {:?}", reply.err().unwrap());
+            return;
+        }
+        let reply = reply.unwrap();
+
+        // Step 2: Check for recency (using config number).
+        if self.config_num >= reply.config_num {
+            warn!("Received config number {} is not more recent than current config number {}. Dropping.", reply.config_num, self.config_num);
+            return;
+        }
+        // Step 3: If new config is more recent, reconfigure.
+        self.config_num = reply.config_num;
         let mut _c = self.config.get();
         let new_c = Arc::make_mut(&mut _c);
-        new_c.worker_config.storage_list = vec!["storage2".to_string()];
-        self.rebroadcast_command_tx.send(new_c.clone());
+        new_c.worker_config.storage_list = reply.storage_servers.clone();
+        self.rebroadcast_command_tx.send(new_c.clone()).unwrap();
     }
 
     async fn preprocess_and_buffer_vote(&mut self, vote: VoteWithSender) {
