@@ -132,6 +132,12 @@ impl ServerContextType for PinnedSequencerContext {
                     .expect("Channel send error");
                 return Ok(RespType::NoResp);
             }
+
+            crate::proto::rpc::proto_payload::Message::CurrentConfigurationQuery(proto_current_configuration_query) => {
+                self.reconfiguration_coordinator_tx.send(ReconfigurationMessage::Query(sender, ack_chan, proto_current_configuration_query)).await
+                    .expect("Channel send error");
+                return Ok(RespType::Resp);
+            }
             _ => {
                 // Drop
             }

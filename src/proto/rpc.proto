@@ -29,6 +29,7 @@ message ProtoPayload {
         proto.consensus.ProtoReconfiguration reconfiguration = 10;
         proto.consensus.ProtoReconfigurationSignal reconfiguration_signal = 11;
         proto.consensus.ProtoReconfigurationStorageVote reconfiguration_storage_vote = 12;
+        proto.consensus.ProtoCurrentConfigurationQuery current_configuration_query = 13;
 
     }
 }
