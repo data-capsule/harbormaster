@@ -111,7 +111,7 @@ data_dir = "/data/"
 controller_must_run = true # IMPORTANT: Must be true for reconfiguration experiments.
 
 [experiments.sweeping_parameters]
-num_clients = [1024]
+num_clients = [10, 512]
 # Script complains without at least one sweeping parameter.
 
 [[results]]

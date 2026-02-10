@@ -271,6 +271,7 @@ impl ReconfigurationCoordinator {
             self.send_current_configuration(ack_chan).await;
         } else {
             let (name, _) = sender.to_name_and_sub_id();
+            warn!("Received current configuration query from {}.", name);
             self.buffer_query(name, ack_chan, query).await;
         }
     }
@@ -323,6 +324,7 @@ impl ReconfigurationCoordinator {
         let current_ci = *self.commit_indices.get(&name).unwrap();
 
         if current_ci >= target_ci {
+            warn!("Reply to buffered query from {}. Current commit index: {} >= target commit index: {}", name, current_ci, target_ci);
             self.reply_to_buffered_query(name).await;
         }
     }

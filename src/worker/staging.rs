@@ -207,6 +207,7 @@ impl Staging {
         let query = ProtoCurrentConfigurationQuery {
             commit_index: self.commit_index,
         };
+        warn!("Sending reconfiguration query to coordinator. Commit index: {}", self.commit_index);
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::CurrentConfigurationQuery(query)),
         };
@@ -235,6 +236,7 @@ impl Staging {
             return;
         }
         // Step 3: If new config is more recent, reconfigure.
+        warn!("Received new configuration: {:?}", reply);
         self.config_num = reply.config_num;
         let mut _c = self.config.get();
         let new_c = Arc::make_mut(&mut _c);
