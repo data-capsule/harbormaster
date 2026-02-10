@@ -174,6 +174,7 @@ impl Staging {
         loop {
             tokio::select! {
                 _ = self.reconfig_timer.wait() => {
+                    warn!("Reconfig timer ticked. Maybe reconfiguring.");
                     self.maybe_reconfigure().await;
                 },
                 Some(vote) = self.vote_rx.recv() => {

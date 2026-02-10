@@ -1,7 +1,7 @@
 use std::{io::Error, pin::Pin, process::exit, sync::Arc, u64};
 
 use hashbrown::HashMap;
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use prost::Message as _;
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex};
 
@@ -83,7 +83,7 @@ impl Staging {
             },
             block_and_sender_and_origin = self.block_rx.recv() => {
                 if self.is_defunct {
-                    warn!("Received block after defunct signal. Dropping block.");
+                    trace!("Received block after defunct signal. Dropping block.");
                     return Ok(());
                 }
                 self.handle_block(block_and_sender_and_origin).await?;

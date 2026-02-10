@@ -430,6 +430,8 @@ sleep 10
 
         config["workload_config"]["num_clients"] = 1
         config["workload_config"]["duration"] = self.duration
+        config["workload_config"]["start_index"] = 0
+        config["workload_config"]["total_global_clients"] = self.num_clients
 
         with open(os.path.join(config_dir, f"{name}_config.json"), "w") as f:
             json.dump(config, f, indent=4)
