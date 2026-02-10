@@ -6,6 +6,7 @@ import time
 from typing import List
 from psl_experiments import PSLExperiment
 from nimble_experiments import NimbleExperiment
+from psl_reconfiguration_experiments import PSLReconfigurationExperiment
 import tomli
 import click
 from click_default_group import DefaultGroup
@@ -149,6 +150,8 @@ def parse_config(path, workdir=None, existing_experiments=None):
             klass = AutobahnExperiment
         elif experiment_type == "psl_storage":
             klass = PSLExperiment
+        elif experiment_type == "psl_reconfiguration":
+            klass = PSLReconfigurationExperiment
         elif experiment_type == "nimble":
             klass = NimbleExperiment
         project_home = toml_dict["project_home"]
