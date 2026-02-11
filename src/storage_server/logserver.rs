@@ -259,6 +259,11 @@ impl LogServer {
         gced_blocks.extend(cached_blocks);
         let full_chain = gced_blocks;
 
+        if full_chain.len() > 0 {
+            assert!(full_chain.iter().last().unwrap().block.n == end_index);
+            assert!(full_chain[0].block.n == start_index);
+        }
+
         let ae = ProtoAppendEntries {
             fork: Some(ProtoFork {
                 serialized_blocks: full_chain.iter()

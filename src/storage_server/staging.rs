@@ -34,7 +34,7 @@ pub struct Staging {
     ack_after_backfill: Option<HashMap<String, u64>>,
 }
 
-const PER_PEER_BLOCK_WSS: u64 = 10_000;
+const PER_PEER_BLOCK_WSS: u64 = 100_000;
 
 impl Staging {
     pub fn new(
