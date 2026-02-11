@@ -111,6 +111,15 @@ impl Staging {
         self.ack_after_backfill = Some(proto_reconfiguration.last_confirmed_n
             .iter().map(|(worker_name, last_n)| (worker_name.clone(), *last_n)).collect());
 
+        error!("Skip upto: {:?}", proto_reconfiguration.skip_upto);
+        error!("Start n: {:?}", proto_reconfiguration.start_n);
+        error!("Last confirmed n: {:?}", proto_reconfiguration.last_confirmed_n);
+        error!("Request from: {:?}", proto_reconfiguration.request_from);
+
+        for (worker_name, skip_upto) in proto_reconfiguration.skip_upto.iter() {
+            self.skip_upto.insert(SenderType::Auth(worker_name.clone(), 0), *skip_upto);
+        }
+
         let my_name = self.config.get().net_config.name.clone();
         for (worker_name, start_n) in proto_reconfiguration.start_n.iter() {
             let end_n = proto_reconfiguration.last_confirmed_n.get(worker_name).unwrap_or(&u64::MAX);
@@ -124,6 +133,8 @@ impl Staging {
                 start_index: *start_n,
                 end_index: *end_n,
             };
+
+            error!("Backfill query: {:?}", query);
 
             let payload = ProtoPayload {
                 message: Some(crate::proto::rpc::proto_payload::Message::BackfillQuery(query)),
@@ -263,15 +274,22 @@ impl Staging {
 
         let _ = self.logserver_tx.send((origin.clone(), block.clone())).await;
 
-        let _ = match &self.block_broadcaster_tx {
-            Some(tx) => {
-                let (block_tx, block_rx) = oneshot::channel();
-                let _ = tx.send(block_rx).await;
-                block_tx.send(block.clone()).unwrap();
-            }
-            None => {
-            }
-        };
+        let _skip_upto = self.skip_upto.get(&origin).unwrap_or(&0);
+
+        if block.block.n > *_skip_upto {
+            let _ = match &self.block_broadcaster_tx {
+                Some(tx) => {
+                    trace!("Forwarding block {} from origin {}", block.block.n, origin.to_name_and_sub_id().0);
+                    let (block_tx, block_rx) = oneshot::channel();
+                    let _ = tx.send(block_rx).await;
+                    block_tx.send(block.clone()).unwrap();
+                }
+                None => {
+                }
+            };
+        } else {
+            trace!("Dropping block {} from origin {}", block.block.n, origin.to_name_and_sub_id().0);
+        }
 
         let last_n = self.last_confirmed_n.entry(origin.clone())
             .or_insert(0);

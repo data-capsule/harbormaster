@@ -239,12 +239,12 @@ impl BlockBroadcaster {
                 let sz = data.len();
                 let data = PinnedMessage::from(data, sz, SenderType::Anon);
                 
-                let _ = timeout(Duration::from_millis(5_000), PinnedClient::broadcast(
+                let _ = PinnedClient::broadcast(
                     &self.client,
                     &peers, &data, 
                     &mut LatencyProfile::new(),
                     threshold
-                )).await;
+                ).await;
             }
         }
     }
@@ -303,7 +303,7 @@ impl BlockBroadcaster {
 
     async fn rebroadcast(&mut self) {
         let blocks_to_broadcast = self.rebroadcast_buffer.iter()
-            .sorted_by_key(|(n, _)| *n)
+            .sorted_by_key(|(n, _)| **n)
             .map(|(_n, block)| block.clone()).collect::<Vec<CachedBlock>>();
         error!("Rebroadcasting {} blocks", blocks_to_broadcast.len());
 

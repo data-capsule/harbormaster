@@ -196,15 +196,18 @@ impl ForkReceiver {
         let _stat_last_n = stats.back().unwrap().block_n;
 
         // Only keep the blocks in AE that I have not seen before.
-        let _len_before_trim = fork.serialized_blocks.len();
-        fork.serialized_blocks.retain(|block| {
-            block.n > _stat_last_n
-        });
-        let _len_after_trim = fork.serialized_blocks.len();
+        // Only do this if you are a storage server.
+        if sender == origin {
+            let _len_before_trim = fork.serialized_blocks.len();
+            trace!("Origin: {:?} stat_last_n: {} block_n: {}", origin, _stat_last_n, fork.serialized_blocks[0].n);
+            fork.serialized_blocks.retain(|block| {
+                block.n > _stat_last_n
+            });
+            let _len_after_trim = fork.serialized_blocks.len();
 
-
-        if sender == origin && _len_before_trim != _len_after_trim {
-            warn!("ForkReceiver: trimmed {} blocks from AE. Original length: {}, new length: {}", _len_before_trim - _len_after_trim, _len_before_trim, _len_after_trim);
+            if _len_before_trim != _len_after_trim {
+                trace!("ForkReceiver: trimmed {} blocks from AE. Original length: {}, new length: {}", _len_before_trim - _len_after_trim, _len_before_trim, _len_after_trim);
+            }
         }
         
         for block in fork.serialized_blocks.drain(..) {
@@ -236,6 +239,7 @@ impl ForkReceiver {
         }).unwrap_or_else(|_| {
             // Not found, return zero hash.
             // This is the first block in the chain.
+            trace!("Parent hash not found for block n: {} from origin: {}", block.n, block.origin);
             FutureHash::None
         })
     }
