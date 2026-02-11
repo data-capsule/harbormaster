@@ -146,9 +146,18 @@ message ProtoHeartbeat {
     bool is_quiscent = 2;
 }
 
+message StorageList {
+    repeated string storage_servers = 1;
+}
+
 message ProtoReconfiguration {
     bool stop_acks = 1;
     bool kill = 2;
+    bool backfill = 3;
+    map<string, string> request_from = 4; // worker name --> storage server name to ask for backfill.
+    // For a full implementation, this needs to be a map of worker name --> list of storage servers.
+    map<string, uint64> last_confirmed_n = 5;
+    map<string, uint64> start_n = 6;
 }
 
 message ProtoReconfigurationSignal {
@@ -157,6 +166,7 @@ message ProtoReconfigurationSignal {
 
 message ProtoReconfigurationStorageVote {
     string storage_server_name = 1;
+    map<string, uint64> last_confirmed_n = 2;
 }
 
 message ProtoCurrentConfigurationQuery {

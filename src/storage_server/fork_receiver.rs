@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, VecDeque}, io::Error, sync::Arc};
 
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use tokio::sync::{mpsc::{UnboundedReceiver, UnboundedSender}, oneshot, Mutex};
 
 use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, CryptoServiceConnector, FutureHash}, proto::consensus::{HalfSerializedBlock, ProtoAppendEntries}, rpc::{SenderType, client::{Client, PinnedClient}}, utils::{StorageServiceConnector, channel::{Receiver, Sender}, get_parent_hash_in_proto_block_ser}};
@@ -165,6 +165,8 @@ impl ForkReceiver {
         }
 
         let origin = fork.serialized_blocks[0].origin.clone();
+
+        trace!("ForkReceiver: handling AE from origin: {:?}", origin);
         let needs_continuity_check = !origin.contains("god");
 
         let chain_id = fork.serialized_blocks[0].chain_id;

@@ -6,7 +6,7 @@ use prost::Message as _;
 use tokio::sync::Mutex;
 
 use crate::{
-    config::AtomicConfig, crypto::AtomicKeyStore, proto::{consensus::{ProtoCurrentConfigurationQuery, ProtoCurrentConfigurationReply, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoReconfigurationStorageVote}, rpc::ProtoPayload}, rpc::{PinnedMessage, SenderType, client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan}}, utils::channel::Receiver
+    config::AtomicConfig, crypto::AtomicKeyStore, proto::{consensus::{ProtoCurrentConfigurationQuery, ProtoCurrentConfigurationReply, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoReconfigurationStorageVote, StorageList}, rpc::ProtoPayload}, rpc::{MessageRef, PinnedMessage, SenderType, client::{Client, PinnedClient}, server::{LatencyProfile, MsgAckChan}}, utils::channel::Receiver
 };
 
 pub enum ReconfigurationMessage {
@@ -15,12 +15,24 @@ pub enum ReconfigurationMessage {
     Query(SenderType, MsgAckChan, ProtoCurrentConfigurationQuery),
 }
 
+
+/// Steps for reconfiguration:
+/// 1. Coordinator sends reconfiguration signal to all current storage servers.
+/// 2. Storage servers stop processing workers' new blocks and replies with a vote.
+/// 3. Once f_old + 1 old storage servers have voted, coordinator sends backfill signal to all new storage servers.
+/// 4. Once new storage servers finish backfilling, they reply with a vote.
+/// 5. Once f_new + 1 new storage servers have voted, coordinator sends kill signal to all old storage servers and finalizes the configuration.
+/// 6. Workers eventually time out on committing new blocks and query the coordinator for the current configuration.
+/// 7. Coordinator buffers such queries as long as the current reconfiguration is going on.
 struct ReconfigurationState {
     config_num: u64,
     storage_servers: Vec<String>,
-    old_storage_server_votes: HashSet<String>,
+    old_storage_server_votes: HashMap<String, HashMap<String /* worker name */, u64 /* last confirmed n */>>,
     old_config_commit_threshold: usize,
-    workers_to_ack: HashMap<String, Option<(u64 /* commit index */, MsgAckChan, bool /* already replied */)>>,
+    new_storage_server_votes: HashSet<String>,
+    new_config_commit_threshold: usize,
+    workers_to_ack: HashMap<String, MsgAckChan>,
+    backfill_already_sent: bool,
 
 }
 
@@ -95,7 +107,7 @@ impl ReconfigurationCoordinator {
     async fn handle_new_commits(&mut self, commits: Vec<(String /* worker name */, u64 /* seq num */)>) {
         for (worker_name, seq_num) in &commits {
             self.commit_indices.insert(worker_name.clone(), *seq_num);
-            self.maybe_reply_to_buffered_query(worker_name.clone()).await;
+            // self.maybe_reply_to_buffered_query(worker_name.clone()).await;
         }
     }
 
@@ -112,10 +124,6 @@ impl ReconfigurationCoordinator {
 
 
         let current_storage_servers = self.get_current_storage_server_list();
-        let workers_to_ack = self.get_worker_list()
-            .iter()
-            .map(|worker| (worker.clone(), None))
-            .collect();
 
 
         // Store reconfiguration state.
@@ -123,9 +131,12 @@ impl ReconfigurationCoordinator {
         let reconfiguration_state = ReconfigurationState {
             config_num: self.config_num_counter,
             storage_servers: signal.new_storage_servers.clone(),
-            old_storage_server_votes: HashSet::new(),
+            old_storage_server_votes: HashMap::new(),
             old_config_commit_threshold: current_storage_servers.len() / 2 + 1, // Majority number of old storage servers.
-            workers_to_ack,
+            new_storage_server_votes: HashSet::new(),
+            new_config_commit_threshold: signal.new_storage_servers.len() / 2 + 1, // Majority number of new storage servers.
+            workers_to_ack: HashMap::new(),
+            backfill_already_sent: false,
         };
         self.current_reconfiguration = Some(reconfiguration_state);
 
@@ -149,8 +160,10 @@ impl ReconfigurationCoordinator {
             .clone()
     }
 
+    /// Step 1
     async fn send_stop_acks(&self, storage_servers: &[String]) {
-        let stop_msg = ProtoReconfiguration { stop_acks: true, kill: false };
+        // Load balance each old server to new servers.
+        let stop_msg = ProtoReconfiguration { stop_acks: true, kill: false, backfill: false, request_from: HashMap::new(), last_confirmed_n: HashMap::new(), start_n: HashMap::new() };
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::Reconfiguration(
@@ -180,6 +193,9 @@ impl ReconfigurationCoordinator {
         }
     }
 
+
+    /// Same function to capture votes for both step 2 and step 4.
+    /// Assumes that no storage server in old configuration is in new configuration and vice versa.
     async fn handle_storage_vote(&mut self, vote: ProtoReconfigurationStorageVote) {
         info!("Storage vote received: {:?}", vote);
 
@@ -190,9 +206,107 @@ impl ReconfigurationCoordinator {
         }
 
         let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
-        reconfiguration_state.old_storage_server_votes.insert(vote.storage_server_name);
 
-        self.maybe_finalize_reconfiguration().await;
+        if reconfiguration_state.storage_servers.contains(&vote.storage_server_name) {
+            reconfiguration_state.new_storage_server_votes.insert(vote.storage_server_name);
+        } else {
+            reconfiguration_state.old_storage_server_votes.insert(vote.storage_server_name, vote.last_confirmed_n);
+        }
+        // reconfiguration_state.old_storage_server_votes.insert(vote.storage_server_name);
+
+        if !reconfiguration_state.backfill_already_sent {
+            self.maybe_send_backfill_signal().await; // For step 3.
+        }
+        self.maybe_finalize_reconfiguration().await; // For step 5.
+    }
+
+    async fn maybe_send_backfill_signal(&mut self) {
+        if self.current_reconfiguration.is_none() {
+            return;
+        }
+
+        let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
+        if reconfiguration_state.old_storage_server_votes.len() >= reconfiguration_state.old_config_commit_threshold // Majority number of old storage servers voted.
+        {
+            self.send_backfill_signal().await;
+        }   
+    }
+
+    async fn send_backfill_signal(&mut self) {
+        let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
+        let max_last_confirmed_ns = reconfiguration_state.old_storage_server_votes.values()
+            .fold(HashMap::new(), |mut acc: HashMap<String, u64>, last_confirmed_n| {
+                for (worker_name, last_confirmed_n) in last_confirmed_n.iter() {
+                    if !acc.contains_key(worker_name) {
+                        acc.insert(worker_name.clone(), *last_confirmed_n);
+                    } else {
+                        if *last_confirmed_n > *acc.get(worker_name).unwrap() {
+                            acc.insert(worker_name.clone(), *last_confirmed_n);
+                        }
+                    }
+                }
+                acc
+            });
+
+        let mut worker_server_map = HashMap::new(); // (worker name, new storage server name) --> old storage server name
+        for (worker_name, max_confirmed_n) in max_last_confirmed_ns.iter() {
+            // How many storage servers have all these entries?
+            let full_servers = reconfiguration_state.old_storage_server_votes
+                .iter()
+                .filter(|(_, last_confirmed_n)| last_confirmed_n.contains_key(worker_name) && *last_confirmed_n.get(worker_name).unwrap() >= *max_confirmed_n)
+                .map(|(storage_server_name, _)| storage_server_name.clone())
+                .collect::<Vec<String>>();
+            
+            // If we just had the commit index, then we were guaranteed to have at least f_old + 1 entries here.
+            // But we don't have that here.
+            // So at least 1 is guaranteed.
+
+            // Need to load balance new storage servers across these full servers.
+
+            let mut __j = 0;
+            for new_storage_server in reconfiguration_state.storage_servers.iter() {
+                worker_server_map.insert((worker_name.clone(), new_storage_server.clone()), full_servers[__j].clone());
+                __j = (__j + 1) % full_servers.len();
+            }
+        }
+
+        let new_server_request_from_map = worker_server_map.iter()
+            .map(|((worker_name, new_storage_server), old_storage_server)| (new_storage_server.clone(), worker_name.clone(), old_storage_server.clone()))
+            .fold(HashMap::new(), |mut acc, (new_storage_server, worker_name, old_storage_server)| {
+                let entry = acc.entry(new_storage_server.clone()).or_insert(HashMap::new());
+                entry.insert(worker_name.clone(), old_storage_server.clone());
+                acc
+            });
+
+        for new_storage_server in reconfiguration_state.storage_servers.iter() {
+            let request_from = new_server_request_from_map.get(new_storage_server).unwrap().clone();
+            let reconfiguration_message = ProtoReconfiguration { stop_acks: false, kill: false, backfill: true,
+                request_from,
+                last_confirmed_n: max_last_confirmed_ns.clone(),
+                start_n: self.commit_indices.clone(),
+            };
+            warn!("Sending backfill signal to {} {:?}", new_storage_server, reconfiguration_message);
+
+            let payload = ProtoPayload {
+                message: Some(crate::proto::rpc::proto_payload::Message::Reconfiguration(
+                    reconfiguration_message,
+                )),
+            };
+
+            let buf = payload.encode_to_vec();
+            let sz = buf.len();
+            let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
+
+
+            let _ = PinnedClient::send(
+                &self.client,
+                new_storage_server,
+                msg.as_ref(),
+            ).await;
+        
+        }
+
+        reconfiguration_state.backfill_already_sent = true;
     }
 
     async fn maybe_finalize_reconfiguration(&mut self) {
@@ -201,19 +315,19 @@ impl ReconfigurationCoordinator {
             return;
         }
 
-        let acked_workers = self.current_reconfiguration.as_ref().unwrap()
-            .workers_to_ack.iter()
-            .map(|(_, ack_info)| {
-                match ack_info {
-                    Some((_, _, already_replied)) => if *already_replied { 1 } else { 0 },
-                    None => 0,
-                }
-            })
-            .sum::<usize>();
+        // let acked_workers = self.current_reconfiguration.as_ref().unwrap()
+        //     .workers_to_ack.iter()
+        //     .map(|(_, ack_info)| {
+        //         match ack_info {
+        //             Some((_, _, already_replied)) => if *already_replied { 1 } else { 0 },
+        //             None => 0,
+        //         }
+        //     })
+        //     .sum::<usize>();
 
         let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
         if reconfiguration_state.old_storage_server_votes.len() >= reconfiguration_state.old_config_commit_threshold // Majority number of old storage servers voted.
-        && reconfiguration_state.workers_to_ack.len() == acked_workers // No workers left to ack.
+        && reconfiguration_state.new_storage_server_votes.len() >= reconfiguration_state.new_config_commit_threshold // Majority number of new storage servers voted.
         {
             self.finalize_reconfiguration().await;
         }
@@ -231,10 +345,15 @@ impl ReconfigurationCoordinator {
 
         // Send kill signal to all old storage servers.
         self.send_kill_signal(&old_storage_servers).await;
+
+        // Reply to all buffered queries.
+        for (worker_name, _) in reconfiguration_state.workers_to_ack.iter() {
+            self.reply_to_buffered_query(worker_name.clone()).await;
+        }
     }
 
     async fn send_kill_signal(&self, storage_servers: &[String]) {
-        let kill_msg = ProtoReconfiguration { kill: true, stop_acks: false };
+        let kill_msg = ProtoReconfiguration { kill: true, stop_acks: false, backfill: false, request_from: HashMap::new(), last_confirmed_n: HashMap::new(), start_n: HashMap::new() };
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::Reconfiguration(
@@ -296,46 +415,45 @@ impl ReconfigurationCoordinator {
             warn!("Worker {} not found in workers_to_ack. Dropping query.", name);
             return;
         }
-        reconfiguration_state.workers_to_ack.insert(name.clone(), Some((query.commit_index, ack_chan, false)));
-
-        self.maybe_reply_to_buffered_query(name).await;
+        reconfiguration_state.workers_to_ack.insert(name.clone(), ack_chan);
     }
 
-    async fn maybe_reply_to_buffered_query(&mut self, name: String) {
-        if self.current_reconfiguration.is_none() {
-            return;
-        }
-        if !self.current_reconfiguration.as_ref().unwrap().workers_to_ack.contains_key(&name) {
-            return;
-        }
-        if self.current_reconfiguration.as_ref().unwrap().workers_to_ack.get(&name).unwrap().is_none() {
-            return;
-        }
-        if self.current_reconfiguration.as_ref().unwrap().workers_to_ack.get(&name).unwrap().as_ref().unwrap().2 {
-            // Already replied.
-            return;
-        }
+    // async fn maybe_reply_to_buffered_query(&mut self, name: String) {
+    //     if self.current_reconfiguration.is_none() {
+    //         return;
+    //     }
+    //     if !self.current_reconfiguration.as_ref().unwrap().workers_to_ack.contains_key(&name) {
+    //         return;
+    //     }
+    //     if self.current_reconfiguration.as_ref().unwrap().workers_to_ack.get(&name).unwrap().is_none() {
+    //         return;
+    //     }
+    //     if self.current_reconfiguration.as_ref().unwrap().workers_to_ack.get(&name).unwrap().as_ref().unwrap().2 {
+    //         // Already replied.
+    //         return;
+    //     }
 
-        let target_ci = self.current_reconfiguration.as_ref().unwrap()
-            .workers_to_ack.get(&name).unwrap().as_ref()
-            .unwrap().0;
+    //     let target_ci = self.current_reconfiguration.as_ref().unwrap()
+    //         .workers_to_ack.get(&name).unwrap().as_ref()
+    //         .unwrap().0;
 
 
-        let current_ci = *self.commit_indices.get(&name).unwrap();
+    //     let current_ci = *self.commit_indices.get(&name).unwrap();
 
-        if current_ci >= target_ci {
-            warn!("Reply to buffered query from {}. Current commit index: {} >= target commit index: {}", name, current_ci, target_ci);
-            self.reply_to_buffered_query(name).await;
-        }
-    }
+    //     if current_ci >= target_ci {
+    //         warn!("Reply to buffered query from {}. Current commit index: {} >= target commit index: {}", name, current_ci, target_ci);
+    //         self.reply_to_buffered_query(name).await;
+    //     }
+    // }
 
     async fn reply_to_buffered_query(&mut self, name: String) {
         let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
         let storage_servers = reconfiguration_state.storage_servers.clone();
         let config_num = reconfiguration_state.config_num;
 
-        let (_, ack_chan, already_replied) = reconfiguration_state.workers_to_ack
-            .get_mut(&name).unwrap().as_mut().unwrap();
+        let Some(ack_chan) = reconfiguration_state.workers_to_ack.remove(&name) else {
+            return;
+        };
 
         let current_configuration = ProtoCurrentConfigurationReply {
             storage_servers,
@@ -345,11 +463,6 @@ impl ReconfigurationCoordinator {
         let buf = current_configuration.encode_to_vec();
         let sz = buf.len();
         let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
-        let _ = ack_chan.send((msg, LatencyProfile::new())).await;
-
-        *already_replied = true;
-
-        self.maybe_finalize_reconfiguration().await;
-        
+        let _ = ack_chan.send((msg, LatencyProfile::new())).await;        
     }
 }

@@ -12,7 +12,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{consensus::{ProtoAppendEntries, ProtoHeartbeat, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}, reconfiguration_coordinator::{ReconfigurationCoordinator, ReconfigurationMessage}}, utils::{BlackHoleStorageEngine, OptReceiver, StorageService, channel::{Receiver, Sender, make_channel}}};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{consensus::{ProtoAppendEntries, ProtoHeartbeat, ProtoReconfiguration, ProtoReconfigurationSignal, ProtoVectorClock}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, sequencer::{auditor::Auditor, commit_buffer::CommitBuffer, controller::Controller, heartbeat_handler::HeartbeatHandler, lockserver::{LockServer, LockServerCommand}, reconfiguration_coordinator::{ReconfigurationCoordinator, ReconfigurationMessage}}, utils::{BlackHoleStorageEngine, OptReceiver, OptSender, StorageService, channel::{Receiver, Sender, make_channel}}};
 use crate::storage_server::fork_receiver::ForkReceiver;
 use crate::storage_server::staging::Staging;
 
@@ -219,7 +219,7 @@ impl SequencerNode {
         let (auditor_tx, auditor_rx) = tokio::sync::mpsc::unbounded_channel(); // make_channel(_chan_depth);
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), false, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
 
-        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, OptReceiver::none(), fork_receiver_cmd_tx, None, false);
+        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, None, OptReceiver::none(), fork_receiver_cmd_tx, None, false, OptSender::none());
         let commit_buffer = CommitBuffer::new(config.clone(), logserver_rx, auditor_tx);
 
         let (reconfiguration_coordinator_ci_tx, reconfiguration_coordinator_ci_rx) = tokio::sync::mpsc::unbounded_channel();

@@ -8,7 +8,7 @@ use log::{debug, warn};
 use prost::Message as _;
 use tokio::{sync::{mpsc::unbounded_channel, Mutex}, task::JoinSet};
 
-use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::{ProtoAppendEntries, ProtoReconfiguration}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, utils::{InMemoryStorageEngine, OptReceiver, RocksDBStorageEngine, StorageService, channel::{Receiver, Sender, make_channel}}, worker::block_broadcaster::BroadcasterConfig};
+use crate::{config::{AtomicConfig, Config}, crypto::{AtomicKeyStore, CryptoService, KeyStore}, proto::{checkpoint::ProtoBackfillQuery, consensus::{ProtoAppendEntries, ProtoReconfiguration}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::Client, server::{MsgAckChan, RespType, Server, ServerContextType}}, utils::{InMemoryStorageEngine, OptReceiver, OptSender, RocksDBStorageEngine, StorageService, channel::{Receiver, Sender, make_channel}}, worker::block_broadcaster::BroadcasterConfig};
 use fork_receiver::ForkReceiver;
 use staging::Staging;
 use logserver::LogServer;
@@ -213,7 +213,7 @@ impl StorageNode {
 
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), true, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
 
-        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, Some(gc_tx), OptReceiver::some(reconfiguration_rx), fork_receiver_cmd_tx, Some(block_broadcaster_tx), true);
+        let staging = Staging::new(config.clone(), keystore.clone(), staging_rx, logserver_tx, Some(gc_tx), OptReceiver::some(reconfiguration_rx), fork_receiver_cmd_tx, Some(block_broadcaster_tx), true, OptSender::some(backfill_request_tx.clone()));
 
         let logserver_storage = storage.get_connector(crypto.get_connector());
         let logserver = LogServer::new(config.clone(), keystore.clone(), logserver_storage, gc_rx, logserver_rx, backfill_request_rx, None);

@@ -4,7 +4,7 @@ use log::{debug, info, trace, warn};
 use prost::Message as _;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, HashType}, proto::{checkpoint::ProtoBackfillQuery, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}}, rpc::{client::{Client, PinnedClient}, MessageRef, SenderType}, utils::{channel::Receiver, timer::ResettableTimer, StorageServiceConnector}};
+use crate::{config::AtomicConfig, crypto::{AtomicKeyStore, CachedBlock, HashType}, proto::{checkpoint::ProtoBackfillQuery, consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{MessageRef, SenderType, client::{Client, PinnedClient}}, utils::{StorageServiceConnector, channel::Receiver, timer::ResettableTimer}};
 
 pub struct LogServer {
     config: AtomicConfig,
@@ -203,7 +203,7 @@ impl LogServer {
     }
 
     async fn handle_query(&mut self, query: ProtoBackfillQuery, is_remote: bool) -> Option<ProtoAppendEntries> {
-        debug!("Received backfill query: {:?}", query);
+        info!("Received backfill query: {:?}", query);
 
         let origin = query.origin;
         if origin.is_none() {
@@ -216,10 +216,32 @@ impl LogServer {
             return None;
         }
 
-        let fork = self.fork_cache.get_mut(&origin).unwrap();
+        let fork = self.fork_cache.get(&origin).unwrap();
 
         let start_index = query.start_index;
         let end_index = query.end_index;
+
+        if end_index != u64::MAX // Very specific instructions, not just best effort.
+        && (fork.len() == 0 || fork.iter().last().unwrap().block.n < end_index) {
+            // There may be blocks in the queue, we must keep adding them to the fork before answering this query.
+            loop {
+                let fork = self.fork_cache.get(&origin).unwrap();
+
+                if fork.len() == 0 || fork.iter().last().unwrap().block.n < end_index {
+                    break;
+                }
+                // Same logic as the main tokio::select!
+                let sender_and_block = self.block_rx.recv().await.unwrap(); 
+                    
+                let (sender, block) = sender_and_block;
+
+                self.submitted_block_window += 1;
+                self.submitted_bytes_window += block.block_ser.len();
+                self.handle_block(block, sender).await;
+            }
+        }
+
+        let fork = self.fork_cache.get_mut(&origin).unwrap();
 
         // Get all the blocks stored in memory.
         let cached_blocks = fork.iter()
@@ -262,7 +284,11 @@ impl LogServer {
     }
 
     async fn reply_ae(&mut self, reply_name: String, ae: ProtoAppendEntries) {
-        let buf = ae.encode_to_vec();
+        info!("Replying to backfill query to {}. Fork size: {}", reply_name, ae.fork.as_ref().unwrap().serialized_blocks.len());
+        let payload = ProtoPayload {
+            message: Some(crate::proto::rpc::proto_payload::Message::AppendEntries(ae)),
+        };
+        let buf = payload.encode_to_vec();
         let sz = buf.len();
         let msg = MessageRef(&buf, sz, &SenderType::Anon);
         let _ = PinnedClient::send(&self.client, &reply_name, msg).await;

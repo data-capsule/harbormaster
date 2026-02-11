@@ -90,7 +90,7 @@ linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
 zipf_exponent = 0.99
-read_ratio = 0.0
+read_ratio = 1.0
 
 
 [[experiments]]
@@ -111,7 +111,8 @@ data_dir = "/data/"
 controller_must_run = true # IMPORTANT: Must be true for reconfiguration experiments.
 
 [experiments.sweeping_parameters]
-num_clients = [10, 512]
+# num_clients = [10, 512]
+num_clients = [512]
 # Script complains without at least one sweeping parameter.
 
 [[results]]

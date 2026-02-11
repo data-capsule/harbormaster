@@ -80,7 +80,7 @@ impl Staging {
         nimble_client: PinnedClient,
     ) -> Self {
 
-        let reconfig_timer = ResettableTimer::new(Duration::from_millis(5000));
+        let reconfig_timer = ResettableTimer::new(Duration::from_millis(2000));
         #[cfg(feature = "nimble")]
         let (nimble_request_sender_tx, nimble_request_sender_rx) = unbounded_channel();
 
