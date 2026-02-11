@@ -334,21 +334,32 @@ impl ReconfigurationCoordinator {
     }
 
     async fn finalize_reconfiguration(&mut self) {
-        let reconfiguration_state = self.current_reconfiguration.take().unwrap();
+        let mut reconfiguration_state = self.current_reconfiguration.take().unwrap();
         info!("Reconfiguration finalized. New storage servers: {:?}", reconfiguration_state.storage_servers);
 
         let mut config = self.config.get();
         let old_storage_servers = config.consensus_config.node_list.clone();
         let new_config = Arc::make_mut(&mut config);
-        new_config.consensus_config.node_list = reconfiguration_state.storage_servers;
+        new_config.consensus_config.node_list = reconfiguration_state.storage_servers.clone();
         self.config.set(new_config.clone());
 
         // Send kill signal to all old storage servers.
         self.send_kill_signal(&old_storage_servers).await;
 
         // Reply to all buffered queries.
-        for (worker_name, _) in reconfiguration_state.workers_to_ack.iter() {
-            self.reply_to_buffered_query(worker_name.clone()).await;
+        for (_, ack_chan) in reconfiguration_state.workers_to_ack.iter() {
+            let storage_servers = reconfiguration_state.storage_servers.clone();
+            let config_num = reconfiguration_state.config_num;
+
+            let current_configuration = ProtoCurrentConfigurationReply {
+                storage_servers,
+                config_num,
+            };
+
+            let buf = current_configuration.encode_to_vec();
+            let sz = buf.len();
+            let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
+            let _ = ack_chan.send((msg, LatencyProfile::new())).await;
         }
     }
 
@@ -442,23 +453,18 @@ impl ReconfigurationCoordinator {
     //     }
     // }
 
-    async fn reply_to_buffered_query(&mut self, name: String) {
-        let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
-        let storage_servers = reconfiguration_state.storage_servers.clone();
-        let config_num = reconfiguration_state.config_num;
+    // async fn reply_to_buffered_query(state: &mut ReconfigurationState, name: String) {
+    //     let storage_servers = state.storage_servers.clone();
+    //     let config_num = state.config_num;
 
-        let Some(ack_chan) = reconfiguration_state.workers_to_ack.remove(&name) else {
-            return;
-        };
+    //     let current_configuration = ProtoCurrentConfigurationReply {
+    //         storage_servers,
+    //         config_num,
+    //     };
 
-        let current_configuration = ProtoCurrentConfigurationReply {
-            storage_servers,
-            config_num,
-        };
-
-        let buf = current_configuration.encode_to_vec();
-        let sz = buf.len();
-        let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
-        let _ = ack_chan.send((msg, LatencyProfile::new())).await;        
-    }
+    //     let buf = current_configuration.encode_to_vec();
+    //     let sz = buf.len();
+    //     let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
+    //     let _ = ack_chan.send((msg, LatencyProfile::new())).await;        
+    // }
 }
