@@ -1,8 +1,10 @@
-use std::sync::{Arc, atomic::fence};
+use std::{sync::{Arc, atomic::fence}, time::Duration};
 
 use indexmap::IndexMap;
+use itertools::Itertools as _;
+use log::error;
 use prost::Message;
-use tokio::sync::{Mutex, mpsc::UnboundedReceiver, oneshot};
+use tokio::{sync::{Mutex, mpsc::UnboundedReceiver, oneshot}, time::timeout};
 use crate::{config::{AtomicConfig, AtomicPSLWorkerConfig, PSLWorkerConfig}, crypto::CachedBlock, proto::{consensus::{HalfSerializedBlock, ProtoAppendEntries, ProtoFork}, rpc::ProtoPayload}, rpc::{PinnedMessage, SenderType, client::PinnedClient, server::LatencyProfile}, utils::{OptReceiver, OptUnboundedReceiver, channel::{Receiver, Sender}}};
 
 
@@ -237,12 +239,12 @@ impl BlockBroadcaster {
                 let sz = data.len();
                 let data = PinnedMessage::from(data, sz, SenderType::Anon);
                 
-                let _ = PinnedClient::broadcast(
+                let _ = timeout(Duration::from_millis(5_000), PinnedClient::broadcast(
                     &self.client,
                     &peers, &data, 
                     &mut LatencyProfile::new(),
                     threshold
-                ).await;
+                )).await;
             }
         }
     }
@@ -300,7 +302,10 @@ impl BlockBroadcaster {
     }
 
     async fn rebroadcast(&mut self) {
-        let blocks_to_broadcast = self.rebroadcast_buffer.iter().map(|(n, block)| block.clone()).collect();
+        let blocks_to_broadcast = self.rebroadcast_buffer.iter()
+            .sorted_by_key(|(n, _)| *n)
+            .map(|(_n, block)| block.clone()).collect::<Vec<CachedBlock>>();
+        error!("Rebroadcasting {} blocks", blocks_to_broadcast.len());
 
         self.__broadcast(blocks_to_broadcast).await;
     }

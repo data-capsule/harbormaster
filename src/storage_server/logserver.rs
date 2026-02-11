@@ -179,7 +179,7 @@ impl LogServer {
         fork.push_back(block);
     }
 
-    async fn handle_gc(&mut self, sender: SenderType, n: u64) {
+    async fn handle_gc(&mut self, sender: SenderType, mut n: u64) {
         if !self.fork_cache.contains_key(&sender) {
             return;
         }
@@ -194,9 +194,15 @@ impl LogServer {
             .entry(sender.clone())
             .or_insert(0);
 
+        // Invariant: Once fork cache is non-empty, it always has at least one block.
+        if fork.len() > 0 && fork.iter().last().unwrap().block.n <= n {
+            n = fork.iter().last().unwrap().block.n - 1;
+        }
+        
         if *last_gced_n < n {
             *last_gced_n = n;
         }
+
 
         fork.retain(|b| b.block.n > n);
         trace!("Fork size after GC: {} for origin: {:?}", fork.len(), sender);
@@ -312,11 +318,11 @@ impl LogServer {
         // then the fork_cache isn't empty.
 
         // Find the parent hash to fetch.
-        let parent_hash = self.fork_cache.get(&origin).unwrap() // unwrap is safe because of the invariant above.
-            .front().unwrap()
-            .block.parent.clone() as HashType;
+        let _blk = self.fork_cache.get(&origin).unwrap() // unwrap is safe because of the invariant above.
+            .front().unwrap();
+        let parent_hash = _blk.block.parent.clone() as HashType;
 
-        let mut n = last_gced_n;
+        let mut n = _blk.block.n - 1;
         let mut curr_hash = parent_hash;
         while n >= start_index {
             let block = self.storage.get_block(&curr_hash).await;
@@ -335,7 +341,7 @@ impl LogServer {
         }
 
 
-        blocks
+        blocks.into_iter().rev().collect()
     }
 
 

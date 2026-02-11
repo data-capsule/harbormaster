@@ -34,7 +34,7 @@ pub struct Staging {
     ack_after_backfill: Option<HashMap<String, u64>>,
 }
 
-const PER_PEER_BLOCK_WSS: u64 = 1_000;
+const PER_PEER_BLOCK_WSS: u64 = 10_000;
 
 impl Staging {
     pub fn new(
@@ -278,7 +278,7 @@ impl Staging {
         }
 
         if self.ack_after_backfill.is_some() {
-            warn!("Potential initial backfill from reconfiguration. Origin: {:?} n: {}", origin, block.block.n);
+            trace!("Potential initial backfill from reconfiguration. Origin: {:?} n: {}", origin, block.block.n);
             self.maybe_ack_sequencer_as_new_server().await;
         }
 
