@@ -40,6 +40,8 @@ pub struct ReconfigurationCoordinator {
     config: AtomicConfig,
     client: PinnedClient,
     signal_rx: Receiver<ReconfigurationMessage>,
+
+    audited_rx: UnboundedReceiver<(String /* worker name */, u64 /* seq num */)>,
     ci_rx: UnboundedReceiver<(String /* worker name */, u64 /* seq num */)>,
 
     /// Starts at 0, that's the first config everybody starts with.
@@ -49,7 +51,8 @@ pub struct ReconfigurationCoordinator {
     /// If this is Some, then we are in the middle of a reconfiguration and all reconfiguration commands will be dropped.
     current_reconfiguration: Option<ReconfigurationState>,
 
-    commit_indices: HashMap<String, u64>, // Worker name -> commit index.
+    audited_upto: HashMap<String, u64>, // Worker name -> audit index.
+    committed_upto: HashMap<String, u64>, // Worker name -> commit index.
 }
 
 impl ReconfigurationCoordinator {
@@ -57,20 +60,24 @@ impl ReconfigurationCoordinator {
         config: AtomicConfig,
         keystore: AtomicKeyStore,
         signal_rx: Receiver<ReconfigurationMessage>,
+        audited_rx: UnboundedReceiver<(String /* worker name */, u64 /* seq num */)>,
         ci_rx: UnboundedReceiver<(String /* worker name */, u64 /* seq num */)>,
     ) -> Self {
         let client = Client::new_atomic(config.clone(), keystore.clone(), false, 0).into();
-        let commit_indices = config.get().consensus_config.watchlist.iter().map(|worker| (worker.clone(), 0)).collect();
+        let committed_upto = config.get().consensus_config.watchlist.iter().map(|worker| (worker.clone(), 0)).collect();
+        let audited_upto = config.get().consensus_config.watchlist.iter().map(|worker| (worker.clone(), 0)).collect();
         
         Self {
             config,
             client,
             signal_rx,
+            audited_rx,
             ci_rx,
 
             config_num_counter: 0,
             current_reconfiguration: None,
-            commit_indices,
+            audited_upto,
+            committed_upto,
         }
     }
 
@@ -85,6 +92,11 @@ impl ReconfigurationCoordinator {
             let mut ci_rx_buffer = Vec::with_capacity(self.ci_rx.len());
             self.ci_rx.recv_many(&mut ci_rx_buffer, self.ci_rx.len()).await;
             self.handle_new_commits(ci_rx_buffer).await;
+        }
+        if self.audited_rx.len() > 0 {
+            let mut audited_rx_buffer = Vec::with_capacity(self.audited_rx.len());
+            self.audited_rx.recv_many(&mut audited_rx_buffer, self.audited_rx.len()).await;
+            self.handle_new_audits(audited_rx_buffer).await;
         }
         let signal = self.signal_rx.recv().await;
         match signal {
@@ -106,8 +118,14 @@ impl ReconfigurationCoordinator {
 
     async fn handle_new_commits(&mut self, commits: Vec<(String /* worker name */, u64 /* seq num */)>) {
         for (worker_name, seq_num) in &commits {
-            self.commit_indices.insert(worker_name.clone(), *seq_num);
+            self.committed_upto.insert(worker_name.clone(), *seq_num);
             // self.maybe_reply_to_buffered_query(worker_name.clone()).await;
+        }
+    }
+
+    async fn handle_new_audits(&mut self, audits: Vec<(String /* worker name */, u64 /* seq num */)>) {
+        for (worker_name, seq_num) in &audits {
+            self.audited_upto.insert(worker_name.clone(), *seq_num);
         }
     }
 
@@ -163,7 +181,7 @@ impl ReconfigurationCoordinator {
     /// Step 1
     async fn send_stop_acks(&self, storage_servers: &[String]) {
         // Load balance each old server to new servers.
-        let stop_msg = ProtoReconfiguration { stop_acks: true, kill: false, backfill: false, request_from: HashMap::new(), last_confirmed_n: HashMap::new(), start_n: HashMap::new() };
+        let stop_msg = ProtoReconfiguration { stop_acks: true, kill: false, backfill: false, request_from: HashMap::new(), last_confirmed_n: HashMap::new(), start_n: HashMap::new(), skip_upto: HashMap::new() };
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::Reconfiguration(
@@ -283,7 +301,8 @@ impl ReconfigurationCoordinator {
             let reconfiguration_message = ProtoReconfiguration { stop_acks: false, kill: false, backfill: true,
                 request_from,
                 last_confirmed_n: max_last_confirmed_ns.clone(),
-                start_n: self.commit_indices.clone(),
+                start_n: self.audited_upto.clone(),
+                skip_upto: self.committed_upto.clone(),
             };
             warn!("Sending backfill signal to {} {:?}", new_storage_server, reconfiguration_message);
 
@@ -364,7 +383,7 @@ impl ReconfigurationCoordinator {
     }
 
     async fn send_kill_signal(&self, storage_servers: &[String]) {
-        let kill_msg = ProtoReconfiguration { kill: true, stop_acks: false, backfill: false, request_from: HashMap::new(), last_confirmed_n: HashMap::new(), start_n: HashMap::new() };
+        let kill_msg = ProtoReconfiguration { kill: true, stop_acks: false, backfill: false, request_from: HashMap::new(), last_confirmed_n: HashMap::new(), start_n: HashMap::new(), skip_upto: HashMap::new() };
 
         let payload = ProtoPayload {
             message: Some(crate::proto::rpc::proto_payload::Message::Reconfiguration(

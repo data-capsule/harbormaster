@@ -171,6 +171,7 @@ impl ForkReceiver {
 
         let chain_id = fork.serialized_blocks[0].chain_id;
         let origin = SenderType::Auth(origin, chain_id);
+        // TODO: Drop if already confirmed.
  
         // let stats = self.continuity_stats
         //     .entry(origin.clone())
@@ -191,7 +192,20 @@ impl ForkReceiver {
         }
 
         let stats = self.continuity_stats.get_mut(&origin).unwrap();
-    
+
+        let _stat_last_n = stats.back().unwrap().block_n;
+
+        // Only keep the blocks in AE that I have not seen before.
+        let _len_before_trim = fork.serialized_blocks.len();
+        fork.serialized_blocks.retain(|block| {
+            block.n > _stat_last_n
+        });
+        let _len_after_trim = fork.serialized_blocks.len();
+
+
+        if sender == origin && _len_before_trim != _len_after_trim {
+            warn!("ForkReceiver: trimmed {} blocks from AE. Original length: {}, new length: {}", _len_before_trim - _len_after_trim, _len_before_trim, _len_after_trim);
+        }
         
         for block in fork.serialized_blocks.drain(..) {
             let _n = block.n;

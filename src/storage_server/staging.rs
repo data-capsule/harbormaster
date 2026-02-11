@@ -20,6 +20,8 @@ pub struct Staging {
     gc_timer: Arc<Pin<Box<ResettableTimer>>>,
     fork_receiver_cmd_tx: UnboundedSender<ForkReceiverCommand>,
 
+    skip_upto: HashMap<SenderType, u64>,
+
     last_confirmed_n: HashMap<SenderType, u64>,
     block_broadcaster_tx: Option<Sender<oneshot::Receiver<CachedBlock>>>,
 
@@ -61,6 +63,7 @@ impl Staging {
             gc_tx,
             client: client.into(),
 
+            skip_upto: HashMap::new(),
             last_confirmed_n: HashMap::new(),
             gc_timer,
             block_broadcaster_tx,
