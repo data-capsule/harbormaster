@@ -411,10 +411,6 @@ impl ReconfigurationCoordinator {
 
     async fn buffer_query(&mut self, name: String, ack_chan: MsgAckChan, query: ProtoCurrentConfigurationQuery) {
         let reconfiguration_state = self.current_reconfiguration.as_mut().unwrap();
-        if !reconfiguration_state.workers_to_ack.contains_key(&name) {
-            warn!("Worker {} not found in workers_to_ack. Dropping query.", name);
-            return;
-        }
         reconfiguration_state.workers_to_ack.insert(name.clone(), ack_chan);
     }
 

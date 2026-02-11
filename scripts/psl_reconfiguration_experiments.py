@@ -22,6 +22,9 @@ class PSLReconfigurationExperiment(PSLExperiment):
         ./server storage config.json
         """
 
+        reconfiguration_duration = min(self.duration // 2, 15)
+        remaining_duration = self.duration - reconfiguration_duration
+
         script_base = f"""#!/bin/bash
 set -e
 set -o xtrace
@@ -56,7 +59,7 @@ PID="$PID $!"
                     
             _script += f"""
 # Sleep for half the duration of the experiment
-sleep {self.duration // 2}
+sleep {reconfiguration_duration}
 """
             for vm, bin_list in self.binary_mapping.items():
                 for bin in bin_list:
@@ -70,7 +73,7 @@ PID="$PID $!"
 
             _script += f"""
 # Sleep for the other half of the duration of the experiment
-sleep {self.duration // 2}
+sleep {remaining_duration}
 
 
 # Kill the binaries. First with a SIGINT, then with a SIGTERM, then with a SIGKILL
