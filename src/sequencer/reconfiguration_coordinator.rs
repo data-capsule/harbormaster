@@ -355,7 +355,7 @@ impl ReconfigurationCoordinator {
     }
 
     async fn finalize_reconfiguration(&mut self) {
-        let mut reconfiguration_state = self.current_reconfiguration.take().unwrap();
+        let reconfiguration_state = self.current_reconfiguration.take().unwrap();
         info!("Reconfiguration finalized. New storage servers: {:?}", reconfiguration_state.storage_servers);
 
         let mut config = self.config.get();

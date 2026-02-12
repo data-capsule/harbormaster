@@ -1,4 +1,4 @@
-use std::{io::Error, pin::Pin, process::exit, sync::Arc, u64};
+use std::{io::Error, pin::Pin, process::exit, sync::Arc, time::Duration, u64};
 
 use hashbrown::HashMap;
 use log::{debug, error, trace, warn};
@@ -160,8 +160,11 @@ impl Staging {
 
     async fn handle_reconfiguration(&mut self, sender: SenderType, proto_reconfiguration: ProtoReconfiguration) -> Result<(), ()> {
         if proto_reconfiguration.kill {
-            warn!("Received kill signal. Dying forcefully.");
-            exit(0);
+            warn!("Received kill signal. Dying after a delay of 10 seconds.");
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                exit(0);
+            });
         }
 
         if proto_reconfiguration.backfill {
