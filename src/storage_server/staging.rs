@@ -34,6 +34,8 @@ pub struct Staging {
     /// If this is Some, then after our last_confirmed_n is at least >= the value in the map, we will ack "sequencer1".
     /// If this is None, simply ignore.
     ack_after_backfill: Option<HashMap<String, u64>>,
+
+    __data_retransfer_counter: usize,
 }
 
 const PER_PEER_BLOCK_WSS: u64 = 100_000;
@@ -74,6 +76,7 @@ impl Staging {
             logserver_query_tx,
 
             ack_after_backfill: None,
+            __data_retransfer_counter: 0,
         }
     }
 
@@ -300,6 +303,7 @@ impl Staging {
 
         if self.ack_after_backfill.is_some() {
             trace!("Potential initial backfill from reconfiguration. Origin: {:?} n: {}", origin, block.block.n);
+            self.__data_retransfer_counter += block.block_ser.len();
             self.maybe_ack_sequencer_as_new_server().await;
         }
 
@@ -344,6 +348,8 @@ impl Staging {
             &sender_name,
             MessageRef(&buf, sz, &SenderType::Anon),
         ).await;
+
+        log::info!("Data retransferred: {} MiB", self.__data_retransfer_counter as f64 / 1024.0 / 1024.0);
 
     }
 

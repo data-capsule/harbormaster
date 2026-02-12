@@ -1569,3 +1569,6 @@ class Result:
 
         output_path = os.path.join(self.workdir, output)
         plt.savefig(output_path, bbox_inches='tight')
+
+    def reconfiguration_duration_retransfer_sweep(self):
+        pass

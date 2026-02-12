@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Instant};
 
 use tokio::sync::mpsc::UnboundedReceiver;
 use log::{info, warn};
@@ -33,6 +33,7 @@ struct ReconfigurationState {
     new_config_commit_threshold: usize,
     workers_to_ack: HashMap<String, MsgAckChan>,
     backfill_already_sent: bool,
+    __start_time: Instant,
 
 }
 
@@ -155,6 +156,7 @@ impl ReconfigurationCoordinator {
             new_config_commit_threshold: signal.new_storage_servers.len() / 2 + 1, // Majority number of new storage servers.
             workers_to_ack: HashMap::new(),
             backfill_already_sent: false,
+            __start_time: Instant::now(),
         };
         self.current_reconfiguration = Some(reconfiguration_state);
 
@@ -380,6 +382,9 @@ impl ReconfigurationCoordinator {
             let msg = PinnedMessage::from(buf, sz, SenderType::Anon);
             let _ = ack_chan.send((msg, LatencyProfile::new())).await;
         }
+
+        let duration = reconfiguration_state.__start_time.elapsed();
+        info!("Reconfiguration duration: {} s", duration.as_secs_f64());
     }
 
     async fn send_kill_signal(&self, storage_servers: &[String]) {

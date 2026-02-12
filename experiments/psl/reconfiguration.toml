@@ -98,7 +98,7 @@ name = "ycsb_r0_w16_psl"
 type = "psl_reconfiguration"
 # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
 repeats = 1
-# num_clients = 1024
+num_clients = 1024
 num_nodes = 16
 num_storage_nodes = 6
 num_sequencer_nodes = 1
@@ -106,27 +106,15 @@ node_distribution = "tag:worker"
 storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
-duration = 45
+duration = 120
 data_dir = "/data/"
 controller_must_run = true # IMPORTANT: Must be true for reconfiguration experiments.
 
 [experiments.sweeping_parameters]
-# num_clients = [10, 512]
-num_clients = [1024]
-# Script complains without at least one sweeping parameter.
+num_nodes = [1, 4]
 
 [[results]]
-name = "throughput_latency_client_sweep"
-plotter = "tput_latency_sweep_psl"
-ramp_up = 10
-ramp_down = 10
+name = "reconfiguration_duration_retransfer_sweep"
+plotter = "reconfiguration_duration_retransfer_sweep"
 output = "reconfiguration.pdf"
 force_parse = true
-
-[results.legends]
-ycsb_r0_w16_psl = "HarborMaster"
-ycsb_r0_w16_multilog = "Multilog"
-ycsb_r0_w16_nimble = "Nimble"
-# ycsb_r0_w8_multilog = "Multilog(w=8)"
-# ycsb_r0_w1_multilog = "Multilog(w=1)"
-ycsb_r0_w16_unprotected = "Unprotected"
