@@ -1,13 +1,20 @@
-workdir = "deployment_artifacts"
+workdir = "vldb_rev"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-provider = "aws"
-mode = "modest"
+# provider = "aws"
+mode = "max"
 # mode = "tiny"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin"
 node_port_base = 3000
+
+[deployment_config.tag_node_counts]
+worker = 16
+sequencer = 1
+storage = 3
+client = 3
+
 
 [node_config]
 
@@ -74,14 +81,14 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 1
+max_concurrent_requests = 16
 ramp_up_ms = 10_000
 ramp_down_ms = 10_000
 
 [client_config.workload_config.request_config.KVReadWriteYCSB]
 num_keys = 300_000
 num_fields = 1
-val_size = 100
+val_size = 1000
 linearizable_reads = false
 byz_commit_ratio = 0.0
 load_phase = true
@@ -95,11 +102,11 @@ type = "psl_storage"
 repeats = 1
 # num_clients = 500
 num_nodes = 16
-num_clients = 32
+num_clients = 8192
 num_storage_nodes = 3
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
+storage_distribution = "tag:storage"
 sequencer_distribution = "tag:sequencer"
 build_command = "make"
 duration = 60
@@ -114,12 +121,17 @@ read_cache_size = [1, 30_000, 60_000, 150_000, 210_000, 300_000]
 
 
 [[results]]
-name = "throughput_latency_client_sweep"
-plotter = "tput_latency_sweep_psl"
+name = "stacked_bar_graph"
+plotter = "stacked_bar_graph_psl"
 ramp_up = 10
 ramp_down = 10
-output = "ycsb-r0.pdf"
+output = "read_caching.pdf"
 force_parse = true
+# xlabels = ["1", "15", "31", "63"]
+xlabels = ["0", "0.1", "0.2", "0.5", "0.7", "1.0"]
+xtitle = "Cache Size / Total Keyspace Size"
+legend_order = ["HarborMaster"]
+
 
 [results.legends]
 ycsb_r100_w16_psl = "HarborMaster"

@@ -1,7 +1,11 @@
 from dataclasses import dataclass
 import os
+from pdb import run
 import invoke
 from fabric import Connection
+
+import multiprocessing as mp
+from functools import partial
 
 @dataclass
 class Node:
@@ -57,6 +61,8 @@ def run_remote_public_ip(cmds: list, ssh_user, ssh_key, host: Node|str, hide=Tru
 
 
 
+
+
 def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
     '''
     Copy file from local to remote
@@ -73,6 +79,36 @@ def copy_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):
 
     conn.close()
 
+def run_remote_public_ip_parallel(cmds: list, ssh_user, ssh_key, host: Node, hide=True, timeout=None):
+    run_script = f"""#!/bin/bash    
+set -e
+set -o xtrace
+
+"""
+    for cmd in cmds:
+        run_script += f"""
+{cmd} &
+PID="$PID $!"
+
+"""
+    run_script += f"""
+wait $PID
+
+"""
+
+    with open("/tmp/run_script.sh", "w") as f:
+        f.write(run_script)
+
+    copy_remote_public_ip("/tmp/run_script.sh", "/tmp/run_script.sh", ssh_user, ssh_key, host)
+
+    results = run_remote_public_ip([
+        "bash /tmp/run_script.sh",
+        "rm -f /tmp/run_script.sh"
+    ], ssh_user, ssh_key, host, hide=hide, timeout=timeout)
+
+    run_local(["rm -f /tmp/run_script.sh"])
+
+    return results
 
 
 def copy_file_from_remote_public_ip(src, dest, ssh_user, ssh_key, host: Node):

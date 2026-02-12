@@ -5,6 +5,7 @@ configs/
 logs/
 perf.data*
 .vscode
+vldb_rev/
 
 venv
 __pycache__

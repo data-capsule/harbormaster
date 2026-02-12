@@ -41,7 +41,7 @@ crossbeam = "0.8.4"
 clap = { version = "4.5.15", features = ["derive", "cargo"] }
 rocksdb = "0.22.0"
 lz4_flex = { version = "0.11" }
-gluesql = "0.15"
+# gluesql = "0.15"
 zipf = "7.0.1"
 kanal = "0.1.0-pre8"
 bincode = "1.3.3"
@@ -65,8 +65,9 @@ rand_distr = "0.5.1"
 eth_trie = "0.6.1"
 memorydb = "0.3.0"
 lru = "0.16.1"
-fjall = "2.11.2"
+# fjall = "2.11.2"
 fs_extra = "1.3.0"
+serde_with = "3.16.1"
 
 [build-dependencies]
 prost-build = { version = "0.14.1" }
@@ -118,6 +119,7 @@ pirateship = ["round_robin_leader", "dynamic_sign", "view_change"]
 
 # Baseline
 nimble = []
+multilog = []
 
 default = ["pirateship", "app_banking", "storage", "fast_path", "platforms", "gossip", "evil"]
 

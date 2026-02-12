@@ -43,6 +43,7 @@ class Deployment:
         assert isinstance(custom_layouts, list)
 
 
+
         for layout in custom_layouts:
             name = layout["name"]
             nodes_per_region = layout["nodes_per_region"]
@@ -54,6 +55,27 @@ class Deployment:
                 "nodes_per_region": nodes_per_region,
                 # "clients_per_region": clients_per_region
             }
+
+    def add_custom_node_distribution_tags(self):
+        """
+        Custom tag format:
+        [deployment_config.tag_node_counts]
+        worker = 4
+        sequencer = 1
+        storage = 3
+        client = 1
+        """
+        self.tag_node_counts = {}
+        if not("tag_node_counts" in self.raw_config):
+            return
+        
+        tag_node_counts = self.raw_config["tag_node_counts"]
+        assert isinstance(tag_node_counts, dict)
+        
+        for tag, count in tag_node_counts.items():
+            self.tag_node_counts[tag] = count
+
+        pprint(self.tag_node_counts)
 
 
     def __init__(self, config, workdir):
@@ -74,6 +96,8 @@ class Deployment:
         self.node_port_base = int(config["node_port_base"])
 
         self.parse_custom_layouts()
+
+        self.add_custom_node_distribution_tags()
 
     def find_azure_tf_dir(self):
         '''
@@ -240,7 +264,11 @@ class Deployment:
         ]
 
         print(ssh_cmds)
-        res = run_remote_public_ip(ssh_cmds, self.ssh_user, self.ssh_key, self.dev_vm)
+        _res = run_remote_public_ip_parallel(ssh_cmds, self.ssh_user, self.ssh_key, self.dev_vm)
+        res = []
+        for __r in _res:
+            res.extend(__r)
+    
 
         for (i, node) in enumerate(nodelist):
             print("Copied to", node.name, "Output (truncated):\n", "\n".join(res[i].split("\n")[-2:]))
@@ -288,6 +316,11 @@ class Deployment:
 
         vm_names = {vm["Name"] for vm in private_ips}
 
+        client_tag_count = 0
+        worker_tag_count = 0
+        storage_tag_count = 0
+        sequencer_tag_count = 0
+
         node_list = {}
         for name in vm_names:
             private_ip = next(vm["IP"] for vm in private_ips if vm["Name"] == name)
@@ -306,12 +339,29 @@ class Deployment:
             else:
                 region_id = 0
 
+            tag = ""
+            if tee_type != "nontee":
+                if sequencer_tag_count < self.tag_node_counts["sequencer"]:
+                    tag = "sequencer"
+                    sequencer_tag_count += 1
+                elif worker_tag_count < self.tag_node_counts["worker"]:
+                    tag = "worker"
+                    worker_tag_count += 1
+                elif storage_tag_count < self.tag_node_counts["storage"]:
+                    tag = "storage"
+                    storage_tag_count += 1
+            else:
+                if client_tag_count < self.tag_node_counts["client"]:
+                    tag = "client"
+                    client_tag_count += 1
+
+
             node_list[name] = {
                 "private_ip": private_ip,
                 "public_ip": public_ip,
                 "tee_type": tee_type,
                 "region_id": region_id,
-                "tag": ""
+                "tag": tag
             }
 
         self.raw_config["node_list"] = node_list

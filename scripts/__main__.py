@@ -439,16 +439,7 @@ def deploy(config, workdir):
     deployment.deploy()
 
 
-@main.command()
-@click.option(
-    "-c", "--config", required=True,
-    type=click.Path(exists=True, file_okay=True, resolve_path=True)
-)
-@click.option(
-    "-d", "--workdir", required=True,
-    type=click.Path(file_okay=False, resolve_path=True)
-)
-def deploy_experiments(config, workdir):
+def _deploy_experiments(config, workdir):
     # Try to get deployment from the pickle file
     pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
     with open(pickle_path, "rb") as f:
@@ -490,6 +481,7 @@ def deploy_experiments(config, workdir):
     deployment.copy_all_to_remote_public_ip()
 
 
+
 @main.command()
 @click.option(
     "-c", "--config", required=True,
@@ -499,12 +491,12 @@ def deploy_experiments(config, workdir):
     "-d", "--workdir", required=True,
     type=click.Path(file_okay=False, resolve_path=True)
 )
-@click.option(
-    "-n", "--name", required=False,
-    type=str,
-    default=None
-)
-def run_experiments(config, workdir, name):
+def deploy_experiments(config, workdir):
+    _deploy_experiments(config, workdir)
+
+
+
+def _run_experiments(config, workdir, name=None):
     # Try to get deployment from the pickle file
     pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
     with open(pickle_path, "rb") as f:
@@ -533,6 +525,24 @@ def run_experiments(config, workdir, name):
 
     for experiment in experiments:
         experiment.save_if_done()
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+@click.option(
+    "-n", "--name", required=False,
+    type=str,
+    default=None
+)
+def run_experiments(config, workdir, name):
+    _run_experiments(config, workdir, name)
+
 
 
 @main.command()
@@ -600,16 +610,7 @@ def sync_local(config, workdir):
     deployment.sync_local_to_dev_vm()
 
 
-@main.command()
-@click.option(
-    "-c", "--config", required=True,
-    type=click.Path(exists=True, file_okay=True, resolve_path=True)
-)
-@click.option(
-    "-d", "--workdir", required=True,
-    type=click.Path(file_okay=False, resolve_path=True)
-)
-def clean_dev(config, workdir):
+def _clean_dev(config, workdir):
     # Try to get deployment from the pickle file
     pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
     with open(pickle_path, "rb") as f:
@@ -621,7 +622,6 @@ def clean_dev(config, workdir):
     deployment.clean_dev_vm()
 
 
-
 @main.command()
 @click.option(
     "-c", "--config", required=True,
@@ -631,7 +631,12 @@ def clean_dev(config, workdir):
     "-d", "--workdir", required=True,
     type=click.Path(file_okay=False, resolve_path=True)
 )
-def clean_logs(config, workdir):
+def clean_dev(config, workdir):
+    _clean_dev(config, workdir)
+
+
+
+def _clean_logs(config, workdir):
     # Try to get deployment from the pickle file
     pickle_path = os.path.join(workdir, "deployment", "deployment.pkl")
     with open(pickle_path, "rb") as f:
@@ -664,6 +669,20 @@ def clean_logs(config, workdir):
             with open(os.path.join(root, "experiment.pkl"), "wb") as f:
                 pickle.dump(experiment, f)
     
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def clean_logs(config, workdir):
+    _clean_logs(config, workdir)
+
 
 
 @main.command()
@@ -746,6 +765,29 @@ def reuse_deployment(config, workdir):
     deployment.deploy()
 
     print("New Working Directory", new_workdir)
+
+
+@main.command()
+@click.option(
+    "-c", "--config", required=True,
+    type=click.Path(exists=True, file_okay=True, resolve_path=True)
+)
+@click.option(
+    "-d", "--workdir", required=True,
+    type=click.Path(file_okay=False, resolve_path=True)
+)
+def rerun(config, workdir):
+    print("Cleaning Dev VM")
+    _clean_dev(config, workdir)
+
+    print("Removing existing experiments")
+    shutil.rmtree(os.path.join(workdir, "experiments"), ignore_errors=True)
+
+    print("Re-deploying experiments")
+    _deploy_experiments(config, workdir)
+
+    print("Running experiments")
+    _run_experiments(config, workdir)
 
 if __name__ == "__main__":
     main()
