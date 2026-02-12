@@ -48,8 +48,8 @@ max_write_buffers_to_merge = 10
 
 [node_config.worker_config]
 all_writes_max_batch_size = 1000
-self_writes_max_batch_size = 16
-self_reads_max_batch_size = 16
+self_writes_max_batch_size = 1
+self_reads_max_batch_size = 1
 batch_max_delay_ms = 50
 heartbeat_max_delay_ms = 60_000 # Essentially disable heartbest. This causes throughput issues.
 signature_max_delay_ms = 20000
@@ -97,8 +97,8 @@ read_ratio = 0.0
 name = "ycsb_r0_w16_psl"
 type = "psl_reconfiguration"
 # git_hash = "209b1804ff2c2259aced1f0960f48167b1966b94"
-repeats = 1
-num_clients = 1024
+repeats = 3
+num_clients = 32
 num_nodes = 16
 num_storage_nodes = 6
 num_sequencer_nodes = 1
@@ -111,7 +111,7 @@ data_dir = "/data/"
 controller_must_run = true # IMPORTANT: Must be true for reconfiguration experiments.
 
 [experiments.sweeping_parameters]
-num_nodes = [1, 4]
+num_nodes = [1, 4, 8, 16]
 
 [[results]]
 name = "reconfiguration_duration_retransfer_sweep"

@@ -166,6 +166,17 @@ class Stats:
 
 
 @dataclass
+class ReconfigurationStats:
+    num_nodes: int
+    num_storage_nodes: int
+    retransmission_mib_avg: float
+    retransmission_mib_stdev: float
+    reconfiguration_duration_s_avg: float
+    reconfiguration_duration_s_stdev: float
+
+
+
+@dataclass
 class Result:
     name: str
     plotter_func: Callable
@@ -1570,5 +1581,219 @@ class Result:
         output_path = os.path.join(self.workdir, output)
         plt.savefig(output_path, bbox_inches='tight')
 
+
+    def find_retransmission_mib_from_log(self, log_dir, storage_node_name, repeat_num):
+        log_file = os.path.join(log_dir, str(repeat_num), f"{storage_node_name}.log")
+        with open(log_file, "r") as f:
+            for line in f:
+                if "Data retransferred" in line:
+                    return float(line.split(" ")[-2])
+        # raise Exception(f"Data retransferred not found in {log_file}")
+        return None
+
+    def find_reconfiguration_duration_from_log(self, log_dir, sequencer_name, repeat_num):
+        log_file = os.path.join(log_dir, str(repeat_num), f"{sequencer_name}.log")
+        with open(log_file, "r") as f:
+            for line in f:
+                if "Reconfiguration duration" in line:
+                    return float(line.split(" ")[-2])
+        # raise Exception(f"Reconfiguration duration not found in {log_file}")
+        return None
+
+    def reconfiguration_duration_retransfer_sweep_parse(self):
+        plot_dict = defaultdict(dict)
+
+        # Which indices do I skip?
+        skip_indices = self.kwargs.get('skip_indices', [])
+
+        summary_file = os.path.join(self.workdir, "summary.txt")
+        summary_file = open(summary_file, "w")
+
+        # Find parsing log files for each group
+        for group_name, experiments in self.experiment_groups.items():
+            print("========", group_name, "========")
+            experiments.sort(key=lambda x: x.seq_num)
+
+            print("========", group_name, "========", file=summary_file)
+
+            # Find parsing log files for each experiment
+            for j, experiment in enumerate(experiments):
+                if j in skip_indices:
+                    continue
+
+                log_dir = os.path.join(experiment.local_workdir, "logs")
+                num_nodes = experiment.num_nodes
+                num_storage_nodes = experiment.num_storage_nodes - experiment.num_storage_nodes // 2 # The last half storage nodes are the new ones.
+                storage_node_names = [f"storage{i}" for i in range(1, experiment.num_storage_nodes+1)][-num_storage_nodes:]
+
+                print("Storage node names", storage_node_names)
+
+                sequencer_name = "sequencer1"
+
+                retransmission_mib_all_repeats = []
+                reconfiguration_duration_s_all_repeats = []
+
+                for repeat_num in range(experiment.repeats):
+                    retransmission_mib_all = [self.find_retransmission_mib_from_log(log_dir, storage_node_name, repeat_num) for storage_node_name in storage_node_names]
+                    retransmission_mib_all = [x for x in retransmission_mib_all if x is not None]
+                    retransmission_server_avg = np.mean(retransmission_mib_all)
+                    retransmission_mib_all_repeats.append(retransmission_server_avg)
+                    reconfiguration_duration_s = self.find_reconfiguration_duration_from_log(log_dir, sequencer_name, repeat_num)
+                    if reconfiguration_duration_s is None:
+                        continue
+                    reconfiguration_duration_s_all_repeats.append(reconfiguration_duration_s)
+
+                retransmission_mib_avg = np.mean(retransmission_mib_all_repeats)
+                retransmission_mib_stdev = np.std(retransmission_mib_all_repeats)
+                reconfiguration_duration_s_avg = np.mean(reconfiguration_duration_s_all_repeats)
+                reconfiguration_duration_s_stdev = np.std(reconfiguration_duration_s_all_repeats)
+
+                plot_dict[group_name][num_nodes] = ReconfigurationStats(
+                    num_nodes=num_nodes,
+                    num_storage_nodes=num_storage_nodes,
+                    retransmission_mib_avg=retransmission_mib_avg,
+                    retransmission_mib_stdev=retransmission_mib_stdev,
+                    reconfiguration_duration_s_avg=reconfiguration_duration_s_avg,
+                    reconfiguration_duration_s_stdev=reconfiguration_duration_s_stdev
+                )
+
+        return plot_dict
+                
+
+
+
+    def reconfiguration_duration_retransfer_sweep_plot(self, plot_dict, output):
+        pprint(plot_dict)
+
+        font = self.kwargs.get('font', {
+            'size': 65
+        })
+        matplotlib.rc('font', **font)
+        matplotlib.rc("axes.formatter", limits=(-99, 99))
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 12))
+
+        # Collect all num_nodes across all groups (sorted)
+        all_num_nodes = sorted(set(
+            num_nodes
+            for group_data in plot_dict.values()
+            for num_nodes in group_data.keys()
+        ))
+
+        # Use equally spaced x positions
+        x_positions = np.arange(len(all_num_nodes))
+        x_labels = [str(n) for n in all_num_nodes]
+
+        colors = plt.cm.tab10.colors
+        markers = ['o', 's', 'D', 'v', '^', 'P', 'H', 'X', 'd', '1']
+
+        for i, (group_name, data) in enumerate(plot_dict.items()):
+            sorted_nodes = sorted(data.keys())
+
+            # Map each node to its equally-spaced x index
+            x_idx = np.array([all_num_nodes.index(n) for n in sorted_nodes])
+
+            # Left subplot: reconfiguration duration
+            durations = [data[n].reconfiguration_duration_s_avg for n in sorted_nodes]
+            duration_errs = [data[n].reconfiguration_duration_s_stdev for n in sorted_nodes]
+            ax1.errorbar(
+                x_idx, durations, yerr=duration_errs,
+                marker=markers[i % len(markers)],
+                markersize=20, linewidth=10, capsize=10,
+                color=colors[i % len(colors)],
+                zorder=3,
+            )
+
+            # Right subplot: retransmission MiB (same color and marker per group)
+            retrans = [data[n].retransmission_mib_avg for n in sorted_nodes]
+            retrans_errs = [data[n].retransmission_mib_stdev for n in sorted_nodes]
+            ax2.errorbar(
+                x_idx, retrans, yerr=retrans_errs,
+                marker=markers[i % len(markers)],
+                markersize=20, linewidth=10, capsize=10,
+                color=colors[i % len(colors)],
+                zorder=3,
+            )
+
+        # Axis labels
+        ax1.set_ylabel("Reconfiguration Time (s)", fontsize=font['size'])
+        ax2.yaxis.set_label_position("right")
+        ax2.yaxis.tick_right()
+        ax2.set_ylabel("Data Retransmitted (MiB)", fontsize=font['size'])
+
+        # Shared x-axis title
+        fig.text(0.5, -0.02, "Number of Nodes", ha='center', fontsize=font['size'])
+
+        # Equally spaced xticks on both subplots
+        for ax in (ax1, ax2):
+            ax.set_xticks(x_positions)
+            ax.set_xticklabels(x_labels)
+
+        # Compute appropriate ylims from data (including error bars)
+        all_duration_tops = [
+            data[n].reconfiguration_duration_s_avg + data[n].reconfiguration_duration_s_stdev
+            for data in plot_dict.values() for n in data.keys()
+        ]
+        all_retrans_tops = [
+            data[n].retransmission_mib_avg + data[n].retransmission_mib_stdev
+            for data in plot_dict.values() for n in data.keys()
+        ]
+
+        duration_max = max(all_duration_tops) if all_duration_tops else 1
+        retrans_max = max(all_retrans_tops) if all_retrans_tops else 1
+
+        # Round up to nice tick-friendly values
+        def nice_ceil(val, num_ticks=5):
+            """Round val up so that it divides evenly into num_ticks nice intervals."""
+            if val <= 0:
+                return 1
+            raw_step = val / num_ticks
+            magnitude = 10 ** np.floor(np.log10(raw_step))
+            nice_steps = [1, 2, 2.5, 5, 10]
+            for ns in nice_steps:
+                step = ns * magnitude
+                if step * num_ticks >= val:
+                    return step * num_ticks, step
+            step = 10 * magnitude
+            return step * num_ticks, step
+
+        num_ticks = 5
+        duration_ylim, duration_step = nice_ceil(duration_max, num_ticks)
+        retrans_ylim, retrans_step = nice_ceil(retrans_max, num_ticks)
+
+        y_pad_frac = 0.05
+        ax1.set_ylim(-duration_ylim * y_pad_frac, duration_ylim)
+        ax2.set_ylim(-retrans_ylim * y_pad_frac, retrans_ylim)
+
+        ax1.set_yticks(np.arange(0, duration_ylim + duration_step / 2, duration_step))
+        ax2.set_yticks(np.arange(0, retrans_ylim + retrans_step / 2, retrans_step))
+
+        # Grids
+        ax1.grid(True, zorder=0)
+        ax2.grid(True, zorder=0)
+
+        plt.tight_layout()
+        fig.subplots_adjust(top=0.95)
+
+        if output is not None:
+            output_path = os.path.join(self.workdir, output)
+            plt.savefig(output_path, bbox_inches='tight')
+        else:
+            plt.show()
+        
+
     def reconfiguration_duration_retransfer_sweep(self):
-        pass
+        force_parse = self.kwargs.get('force_parse', False)
+
+        # Try to fetch plot dict from cache
+        try:
+            if force_parse:
+                raise Exception("Force parse")
+
+            with open(os.path.join(self.workdir, "plot_dict.pkl"), "rb") as f:
+                plot_dict = pickle.load(f)
+        except:
+            plot_dict = self.reconfiguration_duration_retransfer_sweep_parse()
+
+        output = self.kwargs.get('output', None)
+        self.reconfiguration_duration_retransfer_sweep_plot(plot_dict, output)

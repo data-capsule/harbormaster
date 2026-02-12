@@ -22,7 +22,7 @@ class PSLReconfigurationExperiment(PSLExperiment):
         ./server storage config.json
         """
 
-        reconfiguration_duration = min(self.duration // 2, 30)
+        reconfiguration_duration = min(self.duration // 2, 15)
         remaining_duration = self.duration - reconfiguration_duration
 
         script_base = f"""#!/bin/bash
