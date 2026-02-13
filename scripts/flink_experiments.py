@@ -205,7 +205,7 @@ class FlinkExperiment(Experiment):
         cmds = [
             f"git clone https://github.com/alexthomasv/flink-psl.git {remote_repo}/flink-psl",
             f"mkdir -p {remote_repo}/flink-psl/traces",
-            f"cd {remote_repo}/flink-psl/traces && wget https://fiu-trace.s3.us-east-2.amazonaws.com/write-heavy.blkparse",
+            f"cd {remote_repo}/flink-psl/traces && wget https://fiustorage12345.blob.core.windows.net/fiu-traces/write-heavy.blkparse",
         ]
        
         print("before flink-psl remote build")

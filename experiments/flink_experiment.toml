@@ -1,13 +1,18 @@
-workdir = "deployment_artifacts"
+workdir = "vldb_rev"
 project_home = "https://github.com/data-capsule/psl-cvm"
 
 [deployment_config]
-provider = "aws"
-mode = "modest"
+# provider = "aws"
+mode = "max"
 ssh_key = "cluster_key.pem"
 ssh_user = "psladmin" # DO NOT CHANGE THIS for AWS.
 node_port_base = 3000
 
+[deployment_config.tag_node_counts]
+worker = 16
+sequencer = 1
+storage = 3
+client = 3
 
 [node_config]
 
@@ -81,8 +86,8 @@ repeats = 3
 num_storage_nodes = 3
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
-storage_distribution = "uniform"
-sequencer_distribution = "uniform"
+storage_distribution = "tag:storage"
+sequencer_distribution = "tag:sequencer"
 num_clients = 1
 type = "flink"
 build_command = "make"

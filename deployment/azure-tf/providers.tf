@@ -21,3 +21,8 @@ terraform {
 provider "azurerm" {
   features {}
 }
+
+provider "azapi" {
+  use_msi = false
+  use_cli = true # this let's us use azapi via the identity from az login
+}
