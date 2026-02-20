@@ -5,7 +5,7 @@ project_home = "https://github.com/data-capsule/psl-cvm"
 # provider = "aws"
 mode = "max"
 ssh_key = "cluster_key.pem"
-ssh_user = "psladmin" # DO NOT CHANGE THIS for AWS.
+ssh_user = "pftadmin"
 node_port_base = 3000
 
 [deployment_config.tag_node_counts]

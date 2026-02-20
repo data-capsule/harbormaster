@@ -98,7 +98,7 @@ class FlinkExperiment(Experiment):
             f"cd {remote_repo} && git reset --hard",
             f"cd {remote_repo} && git checkout {git_hash}",
             f"cd {remote_repo} && git submodule update --init --recursive",
-            f"cd {remote_repo} && git apply --allow-empty --reject --whitespace=fix diff.patch",
+            f"cd {remote_repo} && git apply --reject --whitespace=fix diff.patch",
         ]
         
         # Then build       
@@ -136,12 +136,12 @@ class FlinkExperiment(Experiment):
         jobmanager.execution.failover-strategy: region
 
         # io.tmp.dirs: /tmp
-        taskmanager.network.dirs: /home/psladmin/flink-tmp/shuffle
-        taskmanager.tmp.dirs: /home/psladmin/flink-tmp/tmp
+        taskmanager.network.dirs: /home/pftadmin/flink-tmp/shuffle
+        taskmanager.tmp.dirs: /home/pftadmin/flink-tmp/tmp
 
         # make sure BOTH TaskManagers and JobManager use that tmp dir (not /tmp)
-        env.java.opts.taskmanager: "-Djava.io.tmpdir=/home/psladmin/flink-tmp/tmp"
-        env.java.opts.jobmanager: "-Djava.io.tmpdir=/home/psladmin/flink-tmp/tmp"
+        env.java.opts.taskmanager: "-Djava.io.tmpdir=/home/pftadmin/flink-tmp/tmp"
+        env.java.opts.jobmanager: "-Djava.io.tmpdir=/home/pftadmin/flink-tmp/tmp"
 
         state.backend.local-recovery: true
         # execution.checkpointing.interval: 1min
@@ -155,8 +155,8 @@ class FlinkExperiment(Experiment):
 
         state.backend: rocksdb
         # state.checkpoints.dir: hdfs://{nn_host}:{NN_RPC_PORT}/flink/checkpoints
-        psl.ssl.cert: /home/psladmin/{config_dir}/Pft_root_cert.pem
-        psl.ed25519.private-key: /home/psladmin/{config_dir}/client1_signing_privkey.pem
+        psl.ssl.cert: /home/pftadmin/{config_dir}/Pft_root_cert.pem
+        psl.ed25519.private-key: /home/pftadmin/{config_dir}/client1_signing_privkey.pem
         psl.node.host: {"localhost" if psl_enabled else ""}
         psl.node.port: {psl_port if psl_enabled else 0}
         psl.lookup.rate: 0.05
@@ -205,7 +205,7 @@ class FlinkExperiment(Experiment):
         cmds = [
             f"git clone https://github.com/alexthomasv/flink-psl.git {remote_repo}/flink-psl",
             f"mkdir -p {remote_repo}/flink-psl/traces",
-            f"cd {remote_repo}/flink-psl/traces && wget https://fiustorage12345.blob.core.windows.net/fiu-traces/write-heavy.blkparse",
+            f"cd {remote_repo}/flink-psl/traces && wget -nc https://fiustorage12345.blob.core.windows.net/fiu-traces/write-heavy.blkparse",
         ]
        
         print("before flink-psl remote build")
@@ -538,10 +538,10 @@ class FlinkExperiment(Experiment):
         ]
 
         copy_script_block = [
-            f"sudo cp -f /home/psladmin/{self.local_workdir}/configs/hdfs-site.xml /usr/local/hadoop/etc/hadoop/hdfs-site.xml;",
-            f"sudo cp -f /home/psladmin/{self.local_workdir}/configs/core-site.xml /usr/local/hadoop/etc/hadoop/core-site.xml;",
-            f"cp -f /home/psladmin/{self.local_workdir}/configs/core-site.xml /home/psladmin/flink-psl/build-target/conf/core-site.xml;",
-            f"cp -f /home/psladmin/{self.local_workdir}/configs/hdfs-site.xml /home/psladmin/flink-psl/build-target/conf/hdfs-site.xml;",
+            f"sudo cp -f /home/pftadmin/{self.local_workdir}/configs/hdfs-site.xml /usr/local/hadoop/etc/hadoop/hdfs-site.xml;",
+            f"sudo cp -f /home/pftadmin/{self.local_workdir}/configs/core-site.xml /usr/local/hadoop/etc/hadoop/core-site.xml;",
+            f"cp -f /home/pftadmin/{self.local_workdir}/configs/core-site.xml /home/pftadmin/flink-psl/build-target/conf/core-site.xml;",
+            f"cp -f /home/pftadmin/{self.local_workdir}/configs/hdfs-site.xml /home/pftadmin/flink-psl/build-target/conf/hdfs-site.xml;",
             f"sudo rm -rf /tmp/psl_fifo/psl_fifo_*.lease || true",
         ]
 
@@ -562,9 +562,9 @@ class FlinkExperiment(Experiment):
                             ssh_command_prefix,
                             f"sudo chmod +x /etc/profile.d/bigdata_env.sh;",
                             f". /etc/profile.d/bigdata_env.sh;",
-                            f"sudo cp -f /home/psladmin/{self.local_workdir}/configs/flink-conf_1{'_psl_disabled' if not psl_enabled else ''}.yaml /home/psladmin/flink-psl/build-target/conf/flink-conf.yaml;",
+                            f"sudo cp -f /home/pftadmin/{self.local_workdir}/configs/flink-conf_1{'_psl_disabled' if not psl_enabled else ''}.yaml /home/pftadmin/flink-psl/build-target/conf/flink-conf.yaml;",
                             *copy_script_block,
-                            f"/home/psladmin/flink-psl/build-target/bin/jobmanager.sh start \\",
+                            f"/home/pftadmin/flink-psl/build-target/bin/jobmanager.sh start \\",
                             *log_dump_lines,
                             "sleep 1",
                         ]
@@ -576,9 +576,9 @@ class FlinkExperiment(Experiment):
                             ssh_command_prefix,
                             f"sudo chmod +x /etc/profile.d/bigdata_env.sh;",
                             f". /etc/profile.d/bigdata_env.sh;",
-                            f"sudo cp -f /home/psladmin/{self.local_workdir}/configs/flink-conf_{extract_flink_node_num}{'_psl_disabled' if not psl_enabled else ''}.yaml /home/psladmin/flink-psl/build-target/conf/flink-conf.yaml;",
+                            f"sudo cp -f /home/pftadmin/{self.local_workdir}/configs/flink-conf_{extract_flink_node_num}{'_psl_disabled' if not psl_enabled else ''}.yaml /home/pftadmin/flink-psl/build-target/conf/flink-conf.yaml;",
                             *copy_script_block,
-                            f"/home/psladmin/flink-psl/build-target/bin/taskmanager.sh start \\",
+                            f"/home/pftadmin/flink-psl/build-target/bin/taskmanager.sh start \\",
                             *log_dump_lines,
                             "sleep 1",
                         ]
@@ -629,8 +629,8 @@ class FlinkExperiment(Experiment):
 
             script_lines.extend([
                 *copy_script_block,
-                f"cp -f /home/psladmin/{self.local_workdir}/configs/flink-conf_1{'_psl_disabled' if not psl_enabled else ''}.yaml /home/psladmin/flink-psl/build-target/conf/flink-conf.yaml",
-                f"cp -f /home/psladmin/{self.local_workdir}/configs/workers /home/psladmin/flink-psl/build-target/conf/workers",
+                f"cp -f /home/pftadmin/{self.local_workdir}/configs/flink-conf_1{'_psl_disabled' if not psl_enabled else ''}.yaml /home/pftadmin/flink-psl/build-target/conf/flink-conf.yaml",
+                f"cp -f /home/pftadmin/{self.local_workdir}/configs/workers /home/pftadmin/flink-psl/build-target/conf/workers",
             ])
 
             script_lines.extend([
@@ -644,11 +644,11 @@ class FlinkExperiment(Experiment):
 
             flink_leader_host = self.extract_flink_leader_private_ip()
             script_lines.extend([
-                f"/home/psladmin/flink-psl/build-target/bin/flink run \\",
+                f"/home/pftadmin/flink-psl/build-target/bin/flink run \\",
                 f"  -m {flink_leader_host}:8081 \\",
                 f"  -p {self.num_nodes} \\",
                 f"  -c com.example.dedup.DedupRefCountBenchmark \\",
-                f"  /home/psladmin/flink-psl/build-target/lib/flink-dedup-bench-1.16.3.jar > {self.remote_workdir}/logs/{repeat_num}/flink.log 2> {self.remote_workdir}/logs/{repeat_num}/flink.err",
+                f"  /home/pftadmin/flink-psl/build-target/lib/flink-dedup-bench-1.16.3.jar > {self.remote_workdir}/logs/{repeat_num}/flink.log 2> {self.remote_workdir}/logs/{repeat_num}/flink.err",
                 "sleep 30",
             ])
             
@@ -666,7 +666,7 @@ class FlinkExperiment(Experiment):
                     if "flink_leader" in bin:
                         cmd_block = [
                             ssh_command_prefix,
-                            f"/home/psladmin/flink-psl/build-target/bin/jobmanager.sh stop'",
+                            f"/home/pftadmin/flink-psl/build-target/bin/jobmanager.sh stop'",
                             "sleep 1",
                         ]
                     elif "flink_worker" in bin:
@@ -674,7 +674,7 @@ class FlinkExperiment(Experiment):
                         cmd_block = [
                             ssh_command_prefix,
                             f" sudo rm -rf /tmp/psl_fifo/psl_fifo_*.lease || true; \\",
-                            f"/home/psladmin/flink-psl/build-target/bin/taskmanager.sh stop'",
+                            f"/home/pftadmin/flink-psl/build-target/bin/taskmanager.sh stop'",
                             "sleep 1",
                         ]
                     elif "hdfs" in bin:
