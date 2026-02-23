@@ -697,9 +697,9 @@ impl CacheManager {
                         // current_vc: current_vc_tx,
                     }).await;
                     // let current_vc = current_vc_rx.await.unwrap();
-                    trace!("Write key: {}, value_hash: {}", String::from_utf8(key.clone()).unwrap(), hex::encode(cached_value_to_val_hash(Some(cached_value))));
+                    trace!("Write key: {}, value_hash: {}", String::from_utf8(key.clone()).unwrap(), hex::encode(cached_value_to_val_hash(&Some(cached_value))));
                 } else {
-                    trace!("Write rejected for key: {}, value_hash: {}, seq_num: {} origin: {}", String::from_utf8(key.clone()).unwrap(), hex::encode(cached_value_to_val_hash(Some(cached_value))), seq_num, sender.to_name_and_sub_id().0);
+                    trace!("Write rejected for key: {}, value_hash: {}, seq_num: {} origin: {}", String::from_utf8(key.clone()).unwrap(), hex::encode(cached_value_to_val_hash(&Some(cached_value))), seq_num, sender.to_name_and_sub_id().0);
                 }
             }
         }

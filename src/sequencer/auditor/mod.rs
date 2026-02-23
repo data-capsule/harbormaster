@@ -1,12 +1,13 @@
 mod partition_auditor;
 
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Deref, pin::Pin, sync::Arc, time::Duration};
 
+use hashbrown::HashSet;
 use log::info;
-use tokio::{sync::{Mutex, mpsc::{UnboundedReceiver, UnboundedSender}}, task::JoinSet};
+use tokio::{sync::{Mutex, mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}}, task::JoinSet};
 use twox_hash::xxhash64;
 
-use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::ProtoReadSet, utils::{channel::{Sender, make_channel}, timer::ResettableTimer, types::{CacheKey, CachedValue}}, worker::{block_sequencer::VectorClock, cache_manager::process_tx_op}};
+use crate::{config::AtomicConfig, crypto::CachedBlock, proto::consensus::ProtoReadSet, utils::{channel::{Receiver, Sender, make_channel}, timer::ResettableTimer, types::{CacheKey, CachedValue}}, worker::{block_sequencer::VectorClock, cache_manager::process_tx_op}};
 
 use partition_auditor::PartitionAuditor;
 
@@ -63,6 +64,13 @@ impl CachedWriteSet {
 
 }
 
+impl Deref for CachedWriteSet {
+    type Target = WriteSet;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 
 struct BlockPartition {
     write_set: CachedWriteSet,
@@ -72,37 +80,67 @@ struct BlockPartition {
     read_vc: VectorClock,
 }
 
+struct AuditorLogStats {
+    total_correct_reads: usize,
+    total_incorrect_reads: usize,
+    partition_id: usize,
+    thread_id: usize,
+}
+
 pub struct Auditor {
     config: AtomicConfig,
-    block_rx: UnboundedReceiver<CachedBlock>,
+    block_rx: Receiver<CachedBlock>,
     reconfiguration_coordinator_tx: UnboundedSender<(String /* worker name */, u64 /* seq num */)>,
 
-    log_timer: Arc<Pin<Box<ResettableTimer>>>,
     partition_manager: PartitionManager,
 
-    partition_auditor_txs: HashMap<(usize /* partition */, usize /* thread */), Sender<BlockPartition>>,
+    partition_auditor_txs: HashMap<(usize /* partition */, usize /* thread */), tokio::sync::mpsc::UnboundedSender<BlockPartition>>,
     partition_auditor_handles: JoinSet<()>,
+
+    log_rx: UnboundedReceiver<AuditorLogStats>,
+    log_stats: HashMap<(usize /* partition */, usize /* thread */), AuditorLogStats>,
+    __log_received: HashSet<(usize /* partition */, usize /* thread */)>,
 
 }
 
 impl Auditor {
+    fn get_thread_per_partition(_config: &AtomicConfig) -> Vec<usize> {
+        let mut thread_per_partition = vec![1; 20];
+
+        let hsh = xxhash64::Hasher::oneshot(PARTITION_SEED, String::from("user1000001:field0").as_bytes()) as usize;
+        let partition = hsh % 20;
+
+        thread_per_partition[partition] = 10;
+
+        let hsh = xxhash64::Hasher::oneshot(PARTITION_SEED, String::from("user1000002:field0").as_bytes()) as usize;
+        let partition = hsh % 20;
+        thread_per_partition[partition] = 5;
+
+
+        let hsh = xxhash64::Hasher::oneshot(PARTITION_SEED, String::from("user1000003:field0").as_bytes()) as usize;
+        let partition = hsh % 20;
+        thread_per_partition[partition] = 2;
+
+
+        thread_per_partition
+    }
     pub fn new(
         config: AtomicConfig,
-        block_rx: UnboundedReceiver<CachedBlock>,
+        block_rx: Receiver<CachedBlock>,
         reconfiguration_coordinator_tx: UnboundedSender<(String /* worker name */, u64 /* seq num */)>,
-        thread_per_partition: Vec<usize>,
     ) -> Self {
-        let log_timer = ResettableTimer::new(Duration::from_millis(config.get().app_config.logger_stats_report_ms));
-        
+        let thread_per_partition = Self::get_thread_per_partition(&config);
         let _chan_depth = config.get().rpc_config.channel_depth as usize;
         let mut partition_auditor_handles = JoinSet::new();
+        let (log_tx, log_rx) = unbounded_channel();
         let partition_auditor_txs = thread_per_partition.iter().enumerate()
             .map(|(partition_id, &num_threads)| {
                 (0..num_threads).map(|thread_id| {
-                    let (tx, rx) = make_channel(_chan_depth);
+                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                     let _config = config.clone();
+                    let log_tx = log_tx.clone();
                     partition_auditor_handles.spawn(async move {
-                        let mut partition_auditor = PartitionAuditor::new(_config, partition_id, thread_id, rx);
+                        let mut partition_auditor = PartitionAuditor::new(_config, partition_id, thread_id, rx, log_tx);
                         partition_auditor.run().await;
                     });
                     ((partition_id, thread_id), tx)
@@ -112,12 +150,15 @@ impl Auditor {
             .collect();
 
         let partition_manager = PartitionManager::new(thread_per_partition);
-        Self { config, block_rx, reconfiguration_coordinator_tx, log_timer, partition_manager, partition_auditor_txs, partition_auditor_handles }
+        Self {
+            config, block_rx, reconfiguration_coordinator_tx, partition_manager, partition_auditor_txs, partition_auditor_handles,
+            log_rx, log_stats: HashMap::new(),
+            __log_received: HashSet::new(),
+        }
     }
 
     pub async fn run(auditor: Arc<Mutex<Self>>) {
         let mut auditor = auditor.lock().await;
-        auditor.log_timer.run().await;
 
         while let Ok(()) = auditor.worker().await {
         }
@@ -125,20 +166,34 @@ impl Auditor {
 
     async fn worker(&mut self) -> Result<(), ()> {
         tokio::select! {
-            _ = self.log_timer.wait() => {
-                self.log_stats().await;
-            },
+            Some(log_stats) = self.log_rx.recv() => {
+                self.handle_log_stats(log_stats).await;
+                Ok(())
+            }
             Some(block) = self.block_rx.recv() => {
                 self.handle_block(block).await;
-            },
+                Ok(())
+            }
         }
-
-        Ok(())
     }
 
-    async fn log_stats(&mut self) {
-        info!("Auditor stats");
+    async fn handle_log_stats(&mut self, log_stats: AuditorLogStats) {
+        self.__log_received.insert((log_stats.partition_id, log_stats.thread_id));
+        self.log_stats.insert((log_stats.partition_id, log_stats.thread_id), log_stats);
+        if self.__log_received.len() == self.partition_auditor_txs.len() {
+            self.log_stats();
+            self.__log_received.clear();
+        }
     }
+
+    fn log_stats(&mut self) {
+        let (total_correct_reads, total_incorrect_reads) = self.log_stats.iter()
+            .fold((0, 0), |(acc_correct, acc_incorrect), (_, log_stats)| 
+            (acc_correct + log_stats.total_correct_reads, acc_incorrect + log_stats.total_incorrect_reads)
+        );
+        info!("Auditor stats: total_correct_reads: {} total_incorrect_reads: {}", total_correct_reads, total_incorrect_reads);
+    }
+
 
     async fn handle_block(&mut self, block: CachedBlock) {
         // Step 1: Split the block into partitions.
@@ -186,7 +241,7 @@ impl Auditor {
                     origin: origin.clone(),
                     seq_num,
                     read_vc: read_vc.clone(),
-                });
+                }).unwrap();
             }
         }
     }

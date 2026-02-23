@@ -791,7 +791,7 @@ impl BlockSequencer {
     fn prepare_read_set(reads: Vec<(CacheKey, Option<CachedValue>, usize, VectorClock)>) -> Vec<(CacheKey, HashType, u64, VectorClock)> {
         reads.into_iter()
             .map(|(key, value, after_write_op_index, vc_delta)| {
-                let val_hash = cached_value_to_val_hash(value);
+                let val_hash = cached_value_to_val_hash(&value);
                 (key, val_hash, after_write_op_index as u64, vc_delta)
             })
             .sorted_by_key(|(_, _, after_write_op_index, _)| *after_write_op_index)
@@ -813,7 +813,7 @@ impl BlockSequencer {
     }
 }
 
-pub fn cached_value_to_val_hash(value: Option<CachedValue>) -> HashType {
+pub fn cached_value_to_val_hash(value: &Option<CachedValue>) -> HashType {
     match value {
         Some(CachedValue::DWW(value)) => value.val_hash.to_bytes_be().1,
         Some(CachedValue::PNCounter(value)) => value.get_value().to_be_bytes().to_vec(),

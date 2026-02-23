@@ -165,7 +165,7 @@ pub struct SequencerNode {
     lock_server: Arc<Mutex<LockServer>>,
     controller: Arc<Mutex<Controller>>,
     heartbeat_handler: Arc<Mutex<HeartbeatHandler>>,
-    reconfiguration_coordinator: Arc<Mutex<ReconfigurationCoordinator>>,
+    reconfiguration_coordinator: Arc<Mutex<ReconfigurationCoordinator>>
 }
 
 impl SequencerNode {
@@ -216,7 +216,7 @@ impl SequencerNode {
         let (staging_tx, staging_rx) = tokio::sync::mpsc::channel(_chan_depth);
         let (logserver_tx, logserver_rx) = make_channel(_chan_depth);
         let (fork_receiver_cmd_tx, fork_receiver_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (auditor_tx, auditor_rx) = tokio::sync::mpsc::unbounded_channel(); // make_channel(_chan_depth);
+        let (auditor_tx, auditor_rx) = make_channel(_chan_depth);
         let fork_receiver = ForkReceiver::new(config.clone(), keystore.clone(), false, fork_receiver_rx, fork_receiver_crypto, fork_receiver_storage, staging_tx, fork_receiver_cmd_rx);
         
         let (reconfiguration_coordinator_committed_upto_tx, reconfiguration_coordinator_committed_upto_rx) = tokio::sync::mpsc::unbounded_channel();
