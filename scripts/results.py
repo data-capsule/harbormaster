@@ -1666,12 +1666,12 @@ class Result:
         pprint(plot_dict)
 
         font = self.kwargs.get('font', {
-            'size': 65
+            'size': 100
         })
         matplotlib.rc('font', **font)
         matplotlib.rc("axes.formatter", limits=(-99, 99))
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 12))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(37.5, 15))
 
         # Collect all num_nodes across all groups (sorted)
         all_num_nodes = sorted(set(
@@ -1699,7 +1699,7 @@ class Result:
             ax1.errorbar(
                 x_idx, durations, yerr=duration_errs,
                 marker=markers[i % len(markers)],
-                markersize=20, linewidth=10, capsize=10,
+                markersize=20, linewidth=20, capsize=10,
                 color=colors[i % len(colors)],
                 zorder=3,
             )
@@ -1710,16 +1710,16 @@ class Result:
             ax2.errorbar(
                 x_idx, retrans, yerr=retrans_errs,
                 marker=markers[i % len(markers)],
-                markersize=20, linewidth=10, capsize=10,
+                markersize=20, linewidth=20, capsize=10,
                 color=colors[i % len(colors)],
                 zorder=3,
             )
 
         # Axis labels
-        ax1.set_ylabel("Reconfiguration Time (s)", fontsize=font['size'])
+        ax1.set_ylabel("Reconfiguration Time\n(s)", fontsize=font['size'])
         ax2.yaxis.set_label_position("right")
         ax2.yaxis.tick_right()
-        ax2.set_ylabel("Data Retransmitted (MiB)", fontsize=font['size'])
+        ax2.set_ylabel("Data Retransmitted\n(MiB)", fontsize=font['size'])
 
         # Shared x-axis title
         fig.text(0.5, -0.02, "Number of Nodes", ha='center', fontsize=font['size'])
