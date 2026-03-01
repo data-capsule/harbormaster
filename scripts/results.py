@@ -765,7 +765,7 @@ class Result:
                         legend = "Commit"
                     tputs = [stat.mean_tput for stat in stat_list]
                     latencies = [stat.median_latency for stat in stat_list]
-                    axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=6, ms=12, linewidth=6)
+                    axes.plot(tputs, latencies, label=legend, color=colors[i], marker=markers[i], mew=10, ms=15, linewidth=10)
 
                     # if "Audit" in legend:
                     #     n_points = len(tputs)
@@ -1064,11 +1064,15 @@ class Result:
         """
 
         fig, ax = plt.subplots(layout="constrained")
+        bar_colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k', "orange"]
+        bar_hatching = ['/', '\\', 'x', '//', '\\\\', 'xx', '//', '\\\\']
         for i, (legend, stats) in enumerate(plot_dict_items):
             rects = ax.bar(
                 bar_start_pos + (gap_between_bars + i * bar_width - 0.1), # Where to start the bar
                 plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3,
+                color=bar_colors[i % len(bar_colors)],
+                hatch=bar_hatching[i % len(bar_hatching)],
 
                 # # Error bars
                 # yerr=stdev_matrix[:, i], # Error bars
