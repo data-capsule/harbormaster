@@ -1053,11 +1053,15 @@ class Result:
         """
 
         fig, ax = plt.subplots(layout="constrained")
+        bar_colors = ['r', 'b', 'g', 'c', 'm', 'y', 'k', "orange"]
+        bar_hatching = ['/', '\\', 'x', '//', '\\\\', 'xx', '//', '\\\\']
         for i, (legend, stats) in enumerate(plot_dict_items):
             rects = ax.bar(
                 bar_start_pos + (gap_between_bars + i * bar_width - 0.1), # Where to start the bar
                 plot_matrix[:, i], # Heights of the bars
                 width=bar_width, label=legend, zorder=3,
+                color=bar_colors[i % len(bar_colors)],
+                hatch=bar_hatching[i % len(bar_hatching)],
 
                 # # Error bars
                 # yerr=stdev_matrix[:, i], # Error bars
@@ -1070,8 +1074,8 @@ class Result:
 
         ax.set_xticks(label_pos, xlabels)
         plt.ylim(0, ylim+50)
-        # plt.yticks([0, 5, 10, 15, 20], fontsize=90)
-        plt.ylim((0, 500))
+        plt.yticks([0, 10, 20, 30, 40, 50], fontsize=90)
+        plt.ylim((0, 50))
         plt.ylabel("Throughput (k req/s)", fontsize=90)
         if "xtitle" in self.kwargs:
             plt.xlabel(self.kwargs["xtitle"], fontsize=80)

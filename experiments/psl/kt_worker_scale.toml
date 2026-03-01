@@ -193,6 +193,7 @@ xlabels = ["1", "2", "4", "8", "16"]
 # xlabels = ["16"]
 xtitle = "Number of Nodes"
 legend_order = ["Nimble", "HarborMaster", "Multilog", "Unprotected"]
+# legend_order = ["HarborMaster", "Multilog", "Nimble", "Unprotected"]
 # legend_order = ["Nimble"]
 
 
