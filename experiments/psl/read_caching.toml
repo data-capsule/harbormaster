@@ -81,7 +81,7 @@ client_sub_id = 0       # This is filled up later by the caller code.
 client_max_retry = 10
 
 [client_config.workload_config]
-max_concurrent_requests = 16
+max_concurrent_requests = 8
 ramp_up_ms = 10_000
 ramp_down_ms = 10_000
 
@@ -102,7 +102,7 @@ type = "psl_storage"
 repeats = 1
 # num_clients = 500
 num_nodes = 16
-num_clients = 8192
+num_clients = 1024
 num_storage_nodes = 3
 num_sequencer_nodes = 1
 node_distribution = "tag:worker"
